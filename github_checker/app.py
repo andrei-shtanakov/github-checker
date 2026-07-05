@@ -2,11 +2,13 @@
 
 from pathlib import Path
 
+from pydantic import ValidationError
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
 
-from github_checker.config import load_config
+from github_checker.config import add_repo, load_config, remove_repo
 from github_checker.github import fetch_all
 from github_checker.models import RepoState
 
@@ -64,6 +66,58 @@ def details_text(state: RepoState) -> str:
         lines.append("  (none)")
     lines += [f"  {branch.name}" for branch in state.branches]
     return "\n".join(lines)
+
+
+class AddRepoScreen(ModalScreen[str | None]):
+    """Prompt for an owner/repo string."""
+
+    CSS = """
+    AddRepoScreen { align: center middle; }
+    #dialog { width: 60; height: auto; border: thick $accent; padding: 1 2; }
+    #dialog Horizontal { height: auto; align-horizontal: right; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Добавить репозиторий (owner/repo):")
+            yield Input(placeholder="owner/repo", id="repo-input")
+            with Horizontal():
+                yield Button("Add", variant="primary", id="ok")
+                yield Button("Cancel", id="cancel")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip() or None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "ok":
+            value = self.query_one("#repo-input", Input).value.strip()
+            self.dismiss(value or None)
+        else:
+            self.dismiss(None)
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    """Yes/no confirmation dialog."""
+
+    CSS = """
+    ConfirmScreen { align: center middle; }
+    #dialog { width: 60; height: auto; border: thick $accent; padding: 1 2; }
+    #dialog Horizontal { height: auto; align-horizontal: right; }
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self._message)
+            with Horizontal():
+                yield Button("Yes", variant="error", id="yes")
+                yield Button("No", id="no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
 
 
 class GithubCheckerApp(App[None]):
@@ -141,3 +195,33 @@ class GithubCheckerApp(App[None]):
             details.update("Нет репозиториев. Нажмите 'a', чтобы добавить.")
             return
         details.update(details_text(state))
+
+    def action_add_repo(self) -> None:
+        def handle_result(name: str | None) -> None:
+            if not name:
+                return
+            try:
+                self._config = add_repo(self._config_path, name)
+            except ValidationError:
+                self.notify(
+                    f"Некорректное имя: {name!r} (нужно owner/repo)",
+                    severity="error",
+                )
+                return
+            self.action_refresh()
+
+        self.push_screen(AddRepoScreen(), handle_result)
+
+    def action_remove_repo(self) -> None:
+        name = self._selected
+        if name is None:
+            return
+
+        def handle_result(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            self._config = remove_repo(self._config_path, name)
+            self._selected = None
+            self.action_refresh()
+
+        self.push_screen(ConfirmScreen(f"Удалить {name}?"), handle_result)

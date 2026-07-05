@@ -117,3 +117,42 @@ async def test_selection_survives_refresh(
         await pilot.pause()
         assert app._selected == "o/two"
         assert table.cursor_coordinate.row == 1
+
+
+@pytest.mark.anyio
+async def test_add_repo_writes_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r"]))
+    app = GithubCheckerApp(config_path)
+    async with app.run_test() as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+        await pilot.press(*"o/new")
+        await pilot.press("enter")
+        await pilot.pause()
+    from github_checker.config import load_config
+
+    assert load_config(config_path).repos == ["o/r", "o/new"]
+
+
+@pytest.mark.anyio
+async def test_remove_repo_writes_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r"]))
+    app = GithubCheckerApp(config_path)
+    async with app.run_test() as pilot:
+        app.apply_states([STATE.model_copy(update={"name": "o/r"})])
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.click("#yes")
+        await pilot.pause()
+    from github_checker.config import load_config
+
+    assert load_config(config_path).repos == []
