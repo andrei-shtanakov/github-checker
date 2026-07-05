@@ -91,7 +91,7 @@ class ProtectionScreen(Screen[list[RulesetInfo] | None]):
         super().__init__()
         self._repo = repo
         self._other_repos = [r for r in all_repos if r != repo]
-        self._infos: list[RulesetInfo] = []
+        self._infos: list[RulesetInfo] | None = None
         self._busy = False
 
     def compose(self) -> ComposeResult:
@@ -109,16 +109,19 @@ class ProtectionScreen(Screen[list[RulesetInfo] | None]):
 
     async def _reload(self) -> None:
         try:
-            self._infos = await list_rulesets(self._repo)
+            infos = await list_rulesets(self._repo)
         except GhError as err:
             self.notify(_one_line(err.message), severity="error")
             return
+        self._infos = infos
         table = self.query_one(DataTable)
         table.clear()
         for info in self._infos:
             table.add_row(info.name, info.enforcement, info.target, key=str(info.id))
 
     def _selected_info(self) -> RulesetInfo | None:
+        if self._infos is None:
+            return None
         table = self.query_one(DataTable)
         if not table.row_count:
             return None
@@ -146,10 +149,10 @@ class ProtectionScreen(Screen[list[RulesetInfo] | None]):
             self.notify("Операция уже выполняется", severity="warning")
             coro.close()
             return
+        self._busy = True
         self.run_worker(self._guarded(coro))
 
     async def _guarded(self, coro: Coroutine[Any, Any, None]) -> None:
-        self._busy = True
         try:
             await coro
         except GhError as err:

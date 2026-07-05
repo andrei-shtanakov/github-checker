@@ -127,3 +127,66 @@ async def test_toggle_enforcement_calls_api(
         await pilot.press("e")
         await pilot.pause()
         assert calls == [("o/r", 1, "disabled")]
+
+
+@pytest.mark.anyio
+async def test_close_after_failed_load_keeps_rulesets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+
+    async def failing_list(repo: str) -> list[RulesetInfo]:
+        raise protection_module.GhError(500, "boom")
+
+    monkeypatch.setattr(protection_module, "list_rulesets", failing_list)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.apply_states([RepoState(name="o/r", rulesets=[INFO])])
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        state = app._states["o/r"]
+        assert state.rulesets == [INFO]  # not wiped to []
+
+
+@pytest.mark.anyio
+async def test_double_keypress_runs_single_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    calls: list[str] = []
+
+    async def fake_list(repo: str) -> list[RulesetInfo]:
+        return [INFO]
+
+    async def fake_get(repo: str, ruleset_id: int) -> RulesetDetails:
+        return DETAILS
+
+    async def slow_set(repo: str, ruleset_id: int, enforcement: str) -> None:
+        calls.append(enforcement)
+        import asyncio
+
+        await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(protection_module, "list_rulesets", fake_list)
+    monkeypatch.setattr(protection_module, "get_ruleset", fake_get)
+    monkeypatch.setattr(protection_module, "set_ruleset_enforcement", slow_set)
+
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.apply_states([RepoState(name="o/r", rulesets=[INFO])])
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ProtectionScreen)
+        # Two synchronous calls with no await between them reproduce the
+        # race: pilot.press yields control between key dispatches, which
+        # gives the first worker time to flip `_busy` before the second
+        # keypress is handled, so it doesn't trigger the race.
+        screen.action_toggle_enforcement()
+        screen.action_toggle_enforcement()
+        await pilot.pause(0.2)
+        assert len(calls) == 1
