@@ -220,3 +220,60 @@ def gh_ready() -> str | None:
     if result.returncode != 0:
         return "gh не авторизован. Выполните `gh auth login`.\n" + result.stderr.strip()
     return None
+
+
+_COPY_STRIP_FIELDS = frozenset(
+    {
+        "id",
+        "source",
+        "source_type",
+        "created_at",
+        "updated_at",
+        "current_user_can_bypass",
+        "node_id",
+        "_links",
+    }
+)
+
+
+async def list_rulesets(repo: str) -> list[RulesetInfo]:
+    """List rulesets of a repository."""
+    data = await _gh_api(f"repos/{repo}/rulesets?per_page=100")
+    return [parse_ruleset_info(item) for item in data]
+
+
+async def get_ruleset(repo: str, ruleset_id: int) -> RulesetDetails:
+    """Fetch full details of one ruleset."""
+    return parse_ruleset_details(await _gh_api(f"repos/{repo}/rulesets/{ruleset_id}"))
+
+
+async def set_ruleset_enforcement(repo: str, ruleset_id: int, enforcement: str) -> None:
+    """Set enforcement ('active' | 'disabled') of a ruleset."""
+    await _gh_api(
+        f"repos/{repo}/rulesets/{ruleset_id}",
+        method="PUT",
+        body={"enforcement": enforcement},
+    )
+
+
+async def delete_ruleset(repo: str, ruleset_id: int) -> None:
+    """Delete a ruleset."""
+    await _gh_api(f"repos/{repo}/rulesets/{ruleset_id}", method="DELETE")
+
+
+def build_ruleset_copy(data: dict[str, Any]) -> dict[str, Any]:
+    """Strip server-side fields from a ruleset body before POSTing a copy."""
+    return {k: v for k, v in data.items() if k not in _COPY_STRIP_FIELDS}
+
+
+async def copy_ruleset(src_repo: str, ruleset_id: int, dst_repo: str) -> None:
+    """Copy a ruleset to another repository (retry with ' (copy)' on 422)."""
+    data = await _gh_api(f"repos/{src_repo}/rulesets/{ruleset_id}")
+    body = build_ruleset_copy(data)
+    try:
+        await _gh_api(f"repos/{dst_repo}/rulesets", method="POST", body=body)
+    except GhError as err:
+        if err.status != 422:
+            raise
+        body["name"] = f"{body['name']} (copy)"
+        await _gh_api(f"repos/{dst_repo}/rulesets", method="POST", body=body)
