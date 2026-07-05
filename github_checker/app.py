@@ -12,6 +12,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Sta
 from github_checker.config import add_repo, load_config, remove_repo
 from github_checker.github import fetch_all
 from github_checker.models import RepoState, RulesetInfo
+from github_checker.protection import ProtectionScreen
 
 COLUMNS = ("Repo", "PRs", "Bot", "Branches", "Alerts", "Rules", "Copilot", "Updated")
 
@@ -146,6 +147,7 @@ class GithubCheckerApp(App[None]):
         ("r", "refresh", "Refresh"),
         ("a", "add_repo", "Add repo"),
         ("d", "remove_repo", "Remove repo"),
+        ("p", "protection", "Rulesets"),
         ("q", "quit", "Quit"),
     ]
 
@@ -247,3 +249,26 @@ class GithubCheckerApp(App[None]):
             self.action_refresh()
 
         self.push_screen(ConfirmScreen(f"Удалить {name}?"), handle_result)
+
+    def action_protection(self) -> None:
+        name = self._selected
+        if name is None:
+            return
+        state = self._states.get(name)
+        if state is None or state.error is not None:
+            self.notify("Репозиторий в состоянии ошибки", severity="warning")
+            return
+        if state.rulesets is None:
+            self.notify(
+                "Нет данных о rulesets (нет прав или ошибка)", severity="warning"
+            )
+            return
+
+        def handle_result(rulesets: list[RulesetInfo] | None) -> None:
+            current = self._states.get(name)
+            if current is None or rulesets is None:
+                return
+            current.rulesets = rulesets
+            self.apply_states(list(self._states.values()))
+
+        self.push_screen(ProtectionScreen(name, self._config.repos), handle_result)
