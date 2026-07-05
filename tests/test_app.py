@@ -13,6 +13,7 @@ from github_checker.models import (
     CopilotReview,
     PullRequest,
     RepoState,
+    RulesetInfo,
 )
 
 STATE = RepoState(
@@ -47,6 +48,7 @@ def test_repo_row_normal() -> None:
         "1",
         "2",
         "n/a",
+        "?",
         "1/2",
         "12:00:00",
     )
@@ -54,7 +56,7 @@ def test_repo_row_normal() -> None:
 
 def test_repo_row_error() -> None:
     state = RepoState(name="o/bad", error="HTTP 404: Not Found")
-    assert repo_row(state) == ("o/bad", "-", "-", "-", "-", "-", "error")
+    assert repo_row(state) == ("o/bad", "-", "-", "-", "-", "-", "-", "error")
 
 
 def test_repo_row_caps_at_100() -> None:
@@ -171,3 +173,23 @@ async def test_remove_repo_writes_config(
     from github_checker.config import load_config
 
     assert load_config(config_path).repos == []
+
+
+def _ri(ruleset_id: int, enforcement: str) -> RulesetInfo:
+    return RulesetInfo(
+        id=ruleset_id, name=f"rs{ruleset_id}", enforcement=enforcement, target="branch"
+    )
+
+
+def test_rules_cell_variants() -> None:
+    from github_checker.app import rules_cell
+
+    assert rules_cell(None) == "?"
+    assert rules_cell([]) == "-"
+    assert rules_cell([_ri(1, "active"), _ri(2, "disabled")]) == "✓1"
+    assert rules_cell([_ri(1, "disabled"), _ri(2, "evaluate")]) == "off2"
+
+
+def test_repo_row_rules_column() -> None:
+    state = STATE.model_copy(update={"rulesets": [_ri(1, "active")]})
+    assert repo_row(state)[5] == "✓1"

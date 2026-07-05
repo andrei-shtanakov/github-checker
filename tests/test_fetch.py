@@ -10,6 +10,7 @@ from tests.fixtures import (
     PULLS,
     REVIEW_COMMENTS,
     REVIEWS_WITH_COPILOT,
+    RULESETS_LIST,
 )
 
 RESPONSES: dict[str, Any] = {
@@ -94,3 +95,69 @@ def test_gh_ready_missing_binary(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "run", raise_fnf)
     message = gh.gh_ready()
     assert message is not None and "gh" in message
+
+
+class FakeProc:
+    def __init__(self, stdout: bytes = b"{}", returncode: int = 0) -> None:
+        self.stdout_data = stdout
+        self.returncode = returncode
+        self.stdin_received: bytes | None = None
+
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
+        self.stdin_received = input
+        return self.stdout_data, b""
+
+
+@pytest.mark.anyio
+async def test_gh_api_post_with_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    proc = FakeProc()
+    recorded: dict[str, Any] = {}
+
+    async def fake_exec(*args: Any, **kwargs: Any) -> FakeProc:
+        recorded["args"] = args
+        return proc
+
+    monkeypatch.setattr(gh.asyncio, "create_subprocess_exec", fake_exec)
+    result = await gh._gh_api("repos/o/r/rulesets", method="POST", body={"name": "x"})
+    assert recorded["args"][0] == "gh"
+    assert "-X" in recorded["args"]
+    assert "POST" in recorded["args"]
+    assert "--input" in recorded["args"]
+    assert proc.stdin_received == b'{"name": "x"}'
+    assert result == {}
+
+
+@pytest.mark.anyio
+async def test_gh_api_delete_empty_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proc = FakeProc(stdout=b"")
+
+    async def fake_exec(*args: Any, **kwargs: Any) -> FakeProc:
+        return proc
+
+    monkeypatch.setattr(gh.asyncio, "create_subprocess_exec", fake_exec)
+    result = await gh._gh_api("repos/o/r/rulesets/1", method="DELETE")
+    assert result is None
+
+
+@pytest.mark.anyio
+async def test_fetch_repo_includes_rulesets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = dict(RESPONSES)
+    responses["repos/o/r/rulesets?per_page=100"] = RULESETS_LIST
+    monkeypatch.setattr(gh, "_gh_api", _fake_gh_api(responses))
+    state = (await gh.fetch_all(["o/r"]))[0]
+    assert state.rulesets is not None
+    assert [r.enforcement for r in state.rulesets] == ["active", "disabled"]
+
+
+@pytest.mark.anyio
+async def test_fetch_repo_rulesets_forbidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gh, "_gh_api", _fake_gh_api(RESPONSES))
+    state = (await gh.fetch_all(["o/r"]))[0]
+    assert state.error is None
+    assert state.rulesets is None

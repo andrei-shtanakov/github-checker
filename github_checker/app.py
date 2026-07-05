@@ -11,9 +11,10 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Sta
 
 from github_checker.config import add_repo, load_config, remove_repo
 from github_checker.github import fetch_all
-from github_checker.models import RepoState
+from github_checker.models import RepoState, RulesetInfo
+from github_checker.protection import ProtectionScreen
 
-COLUMNS = ("Repo", "PRs", "Bot", "Branches", "Alerts", "Copilot", "Updated")
+COLUMNS = ("Repo", "PRs", "Bot", "Branches", "Alerts", "Rules", "Copilot", "Updated")
 
 _COPILOT_STATE_LABELS = {
     "APPROVED": "approved",
@@ -26,10 +27,22 @@ def _count(n: int) -> str:
     return "100+" if n >= 100 else str(n)
 
 
-def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str]:
+def rules_cell(rulesets: list[RulesetInfo] | None) -> str:
+    """Rules column value: ✓N active / offN present-but-off / - none / ? unknown."""
+    if rulesets is None:
+        return "?"
+    active = sum(1 for r in rulesets if r.enforcement == "active")
+    if active:
+        return f"✓{active}"
+    if rulesets:
+        return f"off{len(rulesets)}"
+    return "-"
+
+
+def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str, str]:
     """Build one table row for a repository."""
     if state.error:
-        return (state.name, "-", "-", "-", "-", "-", "error")
+        return (state.name, "-", "-", "-", "-", "-", "-", "error")
     bot = sum(1 for p in state.pulls if p.is_dependabot)
     with_copilot = sum(1 for p in state.pulls if p.copilot_review)
     alerts = "n/a" if state.alerts is None else _count(state.alerts)
@@ -40,6 +53,7 @@ def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str]:
         str(bot),
         _count(len(state.branches)),
         alerts,
+        rules_cell(state.rulesets),
         f"{with_copilot}/{len(state.pulls)}",
         updated,
     )
@@ -133,6 +147,7 @@ class GithubCheckerApp(App[None]):
         ("r", "refresh", "Refresh"),
         ("a", "add_repo", "Add repo"),
         ("d", "remove_repo", "Remove repo"),
+        ("p", "protection", "Rulesets"),
         ("q", "quit", "Quit"),
     ]
 
@@ -234,3 +249,29 @@ class GithubCheckerApp(App[None]):
             self.action_refresh()
 
         self.push_screen(ConfirmScreen(f"Удалить {name}?"), handle_result)
+
+    def action_protection(self) -> None:
+        name = self._selected
+        if name is None:
+            return
+        state = self._states.get(name)
+        if state is None:
+            self.notify("Данные ещё не загружены", severity="warning")
+            return
+        if state.error is not None:
+            self.notify("Репозиторий в состоянии ошибки", severity="warning")
+            return
+        if state.rulesets is None:
+            self.notify(
+                "Нет данных о rulesets (нет прав или ошибка)", severity="warning"
+            )
+            return
+
+        def handle_result(rulesets: list[RulesetInfo] | None) -> None:
+            current = self._states.get(name)
+            if current is None or rulesets is None:
+                return
+            current.rulesets = rulesets
+            self.apply_states(list(self._states.values()))
+
+        self.push_screen(ProtectionScreen(name, self._config.repos), handle_result)
