@@ -8,7 +8,11 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from github_checker.app import GithubCheckerApp
-from github_checker.config import load_config, resolve_config_path
+from github_checker.config import (
+    default_config_path,
+    load_config,
+    resolve_config_path,
+)
 from github_checker.github import gh_ready
 
 
@@ -22,7 +26,7 @@ def main() -> None:
         "--config",
         type=Path,
         default=None,
-        help=("path to repos.toml (default: ~/.config/github-checker/repos.toml)"),
+        help=f"path to repos.toml (default: {default_config_path()})",
     )
     args = parser.parse_args()
     error = gh_ready()

@@ -28,6 +28,10 @@ def resolve_config_path(explicit: Path | None) -> Path:
     if not target.exists() and legacy.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+        try:
+            legacy.unlink()
+        except OSError:
+            pass  # migration succeeded; leftover legacy file is only cosmetic
     return target
 
 

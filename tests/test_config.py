@@ -37,6 +37,7 @@ def test_resolve_config_path_migrates_legacy(
     resolved = resolve_config_path(None)
     assert resolved == tmp_path / "xdg" / "github-checker" / "repos.toml"
     assert load_config(resolved).repos == ["o/legacy"]
+    assert not (workdir / "repos.toml").exists()  # legacy removed after move
 
 
 def test_resolve_config_path_existing_target_not_overwritten(
