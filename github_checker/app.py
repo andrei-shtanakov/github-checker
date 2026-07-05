@@ -255,7 +255,10 @@ class GithubCheckerApp(App[None]):
         if name is None:
             return
         state = self._states.get(name)
-        if state is None or state.error is not None:
+        if state is None:
+            self.notify("Данные ещё не загружены", severity="warning")
+            return
+        if state.error is not None:
             self.notify("Репозиторий в состоянии ошибки", severity="warning")
             return
         if state.rulesets is None:

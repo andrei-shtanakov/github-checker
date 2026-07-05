@@ -152,6 +152,83 @@ async def test_close_after_failed_load_keeps_rulesets(
 
 
 @pytest.mark.anyio
+async def test_non_gh_error_in_reload_does_not_crash_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+
+    async def failing_list(repo: str) -> list[RulesetInfo]:
+        raise ValueError("unexpected api shape")
+
+    monkeypatch.setattr(protection_module, "list_rulesets", failing_list)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.apply_states([RepoState(name="o/r", rulesets=[INFO])])
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        assert isinstance(app.screen, ProtectionScreen)
+
+
+@pytest.mark.anyio
+async def test_screen_highlight_does_not_leak_to_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+
+    async def fake_list(repo: str) -> list[RulesetInfo]:
+        return [INFO]
+
+    async def fake_get(repo: str, ruleset_id: int) -> RulesetDetails:
+        return DETAILS
+
+    monkeypatch.setattr(protection_module, "list_rulesets", fake_list)
+    monkeypatch.setattr(protection_module, "get_ruleset", fake_get)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.apply_states([RepoState(name="o/r", rulesets=[INFO])])
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        assert app._selected == "o/r"
+
+
+@pytest.mark.anyio
+async def test_cursor_move_does_not_cancel_op(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    done: list[str] = []
+    infos = [INFO, INFO.model_copy(update={"id": 2, "name": "second"})]
+
+    async def fake_list(repo: str) -> list[RulesetInfo]:
+        return list(infos)
+
+    async def fake_get(repo: str, ruleset_id: int) -> RulesetDetails:
+        return DETAILS
+
+    async def slow_set(repo: str, ruleset_id: int, enforcement: str) -> None:
+        await asyncio.sleep(0.05)
+        done.append(enforcement)
+
+    monkeypatch.setattr(protection_module, "list_rulesets", fake_list)
+    monkeypatch.setattr(protection_module, "get_ruleset", fake_get)
+    monkeypatch.setattr(protection_module, "set_ruleset_enforcement", slow_set)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.apply_states([RepoState(name="o/r", rulesets=[INFO])])
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        await pilot.press("e")
+        await pilot.press("down")  # triggers _load_details worker
+        await pilot.pause(0.2)
+        assert done == ["disabled"]
+
+
+@pytest.mark.anyio
 async def test_double_keypress_runs_single_operation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

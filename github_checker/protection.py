@@ -113,6 +113,9 @@ class ProtectionScreen(Screen[list[RulesetInfo] | None]):
         except GhError as err:
             self.notify(_one_line(err.message), severity="error")
             return
+        except Exception as err:
+            self.notify(f"{type(err).__name__}: {err}"[:120], severity="error")
+            return
         self._infos = infos
         table = self.query_one(DataTable)
         table.clear()
@@ -131,9 +134,12 @@ class ProtectionScreen(Screen[list[RulesetInfo] | None]):
         return None
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        event.stop()
         info = self._selected_info()
         if info is not None:
-            self.run_worker(self._load_details(info.id), exclusive=True)
+            self.run_worker(
+                self._load_details(info.id), exclusive=True, group="details"
+            )
 
     async def _load_details(self, ruleset_id: int) -> None:
         panel = self.query_one("#protection-details", Static)
@@ -141,6 +147,9 @@ class ProtectionScreen(Screen[list[RulesetInfo] | None]):
             details = await get_ruleset(self._repo, ruleset_id)
         except GhError as err:
             panel.update(f"Не удалось загрузить детали: {_one_line(err.message)}")
+            return
+        except Exception as err:
+            panel.update(f"Не удалось загрузить детали: {type(err).__name__}: {err}")
             return
         panel.update(protection_details_text(details))
 
@@ -150,13 +159,15 @@ class ProtectionScreen(Screen[list[RulesetInfo] | None]):
             coro.close()
             return
         self._busy = True
-        self.run_worker(self._guarded(coro))
+        self.run_worker(self._guarded(coro), group="ops")
 
     async def _guarded(self, coro: Coroutine[Any, Any, None]) -> None:
         try:
             await coro
         except GhError as err:
             self.notify(_one_line(err.message), severity="error")
+        except Exception as err:
+            self.notify(f"{type(err).__name__}: {err}"[:120], severity="error")
         finally:
             self._busy = False
 
@@ -175,7 +186,10 @@ class ProtectionScreen(Screen[list[RulesetInfo] | None]):
 
     def action_copy(self) -> None:
         info = self._selected_info()
-        if info is None or not self._other_repos:
+        if info is None:
+            return
+        if not self._other_repos:
+            self.notify("Нет других репозиториев в конфиге", severity="warning")
             return
 
         def handle_result(target: str | None) -> None:
