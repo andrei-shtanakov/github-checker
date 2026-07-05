@@ -93,13 +93,18 @@ async def fetch_repo(name: str, sem: asyncio.Semaphore) -> RepoState:
                 for p in pulls
             )
         )
-        for pull, reviews in zip(pulls, reviews_json):
-            state = copilot_state(reviews)
-            if state is None:
-                continue
-            comments = await call(
-                f"repos/{name}/pulls/{pull.number}/comments?per_page=100"
+        reviewed = [
+            (pull, state)
+            for pull, reviews in zip(pulls, reviews_json)
+            if (state := copilot_state(reviews)) is not None
+        ]
+        comments_json = await asyncio.gather(
+            *(
+                call(f"repos/{name}/pulls/{pull.number}/comments?per_page=100")
+                for pull, _ in reviewed
             )
+        )
+        for (pull, state), comments in zip(reviewed, comments_json):
             pull.copilot_review = CopilotReview(
                 state=state,
                 comment_count=count_copilot_comments(comments),
@@ -137,10 +142,12 @@ def gh_ready() -> str | None:
     """Return None if gh CLI is installed and authenticated, else a message."""
     try:
         result = subprocess.run(
-            ["gh", "auth", "status"], capture_output=True, text=True
+            ["gh", "auth", "status"], capture_output=True, text=True, timeout=10
         )
     except FileNotFoundError:
         return "gh CLI не найден. Установите его: https://cli.github.com"
+    except subprocess.TimeoutExpired:
+        return "gh auth status не ответил за 10 секунд."
     if result.returncode != 0:
         return "gh не авторизован. Выполните `gh auth login`.\n" + result.stderr.strip()
     return None

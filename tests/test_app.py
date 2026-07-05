@@ -120,6 +120,21 @@ async def test_selection_survives_refresh(
 
 
 @pytest.mark.anyio
+async def test_action_refresh_survives_invalid_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r"]))
+    app = GithubCheckerApp(config_path)
+    async with app.run_test() as pilot:
+        config_path.write_text("repos = [", encoding="utf-8")
+        app.action_refresh()
+        await pilot.pause()
+        assert app._config.repos == ["o/r"]
+
+
+@pytest.mark.anyio
 async def test_add_repo_writes_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

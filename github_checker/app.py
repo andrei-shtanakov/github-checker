@@ -1,5 +1,6 @@
 """Textual dashboard application."""
 
+import tomllib
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -158,14 +159,19 @@ class GithubCheckerApp(App[None]):
 
     def action_refresh(self) -> None:
         """Reload config from disk and refetch everything in the background."""
-        self._config = load_config(self._config_path)
+        try:
+            self._config = load_config(self._config_path)
+        except (tomllib.TOMLDecodeError, ValidationError) as err:
+            self.notify(f"repos.toml не перечитан: {err}", severity="error")
         self.run_worker(self._refresh(), exclusive=True)
 
     async def _refresh(self) -> None:
         self.sub_title = "refreshing…"
-        states = await fetch_all(self._config.repos)
-        self.apply_states(states)
-        self.sub_title = ""
+        try:
+            states = await fetch_all(self._config.repos)
+            self.apply_states(states)
+        finally:
+            self.sub_title = ""
 
     def apply_states(self, states: list[RepoState]) -> None:
         """Replace table contents with freshly fetched states."""
@@ -199,6 +205,9 @@ class GithubCheckerApp(App[None]):
     def action_add_repo(self) -> None:
         def handle_result(name: str | None) -> None:
             if not name:
+                return
+            if name in self._config.repos:
+                self.notify(f"{name} уже в списке", severity="information")
                 return
             try:
                 self._config = add_repo(self._config_path, name)
