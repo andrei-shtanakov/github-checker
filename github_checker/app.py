@@ -11,9 +11,9 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Sta
 
 from github_checker.config import add_repo, load_config, remove_repo
 from github_checker.github import fetch_all
-from github_checker.models import RepoState
+from github_checker.models import RepoState, RulesetInfo
 
-COLUMNS = ("Repo", "PRs", "Bot", "Branches", "Alerts", "Copilot", "Updated")
+COLUMNS = ("Repo", "PRs", "Bot", "Branches", "Alerts", "Rules", "Copilot", "Updated")
 
 _COPILOT_STATE_LABELS = {
     "APPROVED": "approved",
@@ -26,10 +26,22 @@ def _count(n: int) -> str:
     return "100+" if n >= 100 else str(n)
 
 
-def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str]:
+def rules_cell(rulesets: list[RulesetInfo] | None) -> str:
+    """Rules column value: ✓N active / offN present-but-off / - none / ? unknown."""
+    if rulesets is None:
+        return "?"
+    active = sum(1 for r in rulesets if r.enforcement == "active")
+    if active:
+        return f"✓{active}"
+    if rulesets:
+        return f"off{len(rulesets)}"
+    return "-"
+
+
+def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str, str]:
     """Build one table row for a repository."""
     if state.error:
-        return (state.name, "-", "-", "-", "-", "-", "error")
+        return (state.name, "-", "-", "-", "-", "-", "-", "error")
     bot = sum(1 for p in state.pulls if p.is_dependabot)
     with_copilot = sum(1 for p in state.pulls if p.copilot_review)
     alerts = "n/a" if state.alerts is None else _count(state.alerts)
@@ -40,6 +52,7 @@ def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str]:
         str(bot),
         _count(len(state.branches)),
         alerts,
+        rules_cell(state.rulesets),
         f"{with_copilot}/{len(state.pulls)}",
         updated,
     )
