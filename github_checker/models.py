@@ -47,6 +47,28 @@ class PullRequest(BaseModel):
     copilot_review: CopilotReview | None = None
 
 
+class RulesetInfo(BaseModel):
+    """Item of GET repos/{r}/rulesets."""
+
+    id: int
+    name: str
+    enforcement: str
+    target: str
+
+
+class RulesetDetails(BaseModel):
+    """GET repos/{r}/rulesets/{id} — fields the protection screen needs."""
+
+    id: int
+    name: str
+    enforcement: str
+    target: str
+    include: list[str]
+    exclude: list[str]
+    rules: list[str]
+    bypass: list[str]
+
+
 class RepoState(BaseModel):
     """Everything the TUI shows about one repository."""
 
@@ -54,5 +76,6 @@ class RepoState(BaseModel):
     pulls: list[PullRequest] = []
     branches: list[Branch] = []
     alerts: int | None = None
+    rulesets: list[RulesetInfo] | None = None
     error: str | None = None
     updated_at: datetime | None = None

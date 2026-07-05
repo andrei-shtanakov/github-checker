@@ -44,3 +44,53 @@ ALERTS: list[dict[str, Any]] = [
     {"number": 1, "state": "open"},
     {"number": 2, "state": "open"},
 ]
+
+RULESETS_LIST: list[dict[str, Any]] = [
+    {
+        "id": 14708017,
+        "name": "Default Branch Restriction",
+        "target": "branch",
+        "source_type": "Repository",
+        "source": "andrei-shtanakov/atp-platform",
+        "enforcement": "active",
+        "node_id": "RRS_lACqUmVwb3NpdG9yec4r3xLbzgDgZ9E",
+        "created_at": "2025-01-15T10:00:00.000+00:00",
+        "updated_at": "2025-06-01T10:00:00.000+00:00",
+    },
+    {
+        "id": 12637526,
+        "name": "dei-protection",
+        "target": "branch",
+        "source_type": "Repository",
+        "source": "andrei-shtanakov/atp-platform",
+        "enforcement": "disabled",
+    },
+]
+
+RULESET_DETAILS: dict[str, Any] = {
+    "id": 14708017,
+    "name": "Default Branch Restriction",
+    "target": "branch",
+    "source_type": "Repository",
+    "source": "andrei-shtanakov/atp-platform",
+    "enforcement": "active",
+    "current_user_can_bypass": "always",
+    "node_id": "RRS_lACqUmVwb3NpdG9yec4r3xLbzgDgZ9E",
+    "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
+    "rules": [
+        {"type": "deletion"},
+        {"type": "non_fast_forward"},
+        {"type": "update"},
+        {
+            "type": "pull_request",
+            "parameters": {"required_approving_review_count": 0},
+        },
+    ],
+    "bypass_actors": [
+        {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"},
+        {"actor_id": 946600, "actor_type": "Integration", "bypass_mode": "always"},
+    ],
+    "created_at": "2025-01-15T10:00:00.000+00:00",
+    "updated_at": "2025-06-01T10:00:00.000+00:00",
+    "_links": {"self": {"href": "https://api.github.com/..."}},
+}

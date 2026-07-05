@@ -7,7 +7,14 @@ import subprocess
 from datetime import datetime
 from typing import Any
 
-from github_checker.models import Branch, CopilotReview, PullRequest, RepoState
+from github_checker.models import (
+    Branch,
+    CopilotReview,
+    PullRequest,
+    RepoState,
+    RulesetDetails,
+    RulesetInfo,
+)
 
 DEPENDABOT_LOGIN = "dependabot[bot]"
 COPILOT_LOGIN = "copilot-pull-request-reviewer[bot]"
@@ -41,6 +48,49 @@ def copilot_state(reviews: list[dict[str, Any]]) -> str | None:
 def count_copilot_comments(comments: list[dict[str, Any]]) -> int:
     """Count review comments authored by Copilot."""
     return sum(1 for c in comments if c.get("user", {}).get("login") == COPILOT_LOGIN)
+
+
+def parse_ruleset_info(data: dict[str, Any]) -> RulesetInfo:
+    """Map one item of GET repos/{r}/rulesets to a model."""
+    return RulesetInfo(
+        id=data["id"],
+        name=data["name"],
+        enforcement=data["enforcement"],
+        target=data.get("target", "branch"),
+    )
+
+
+def format_bypass_actor(actor: dict[str, Any]) -> str:
+    """Human-readable bypass actor, e.g. 'admin (role), always'."""
+    actor_type = actor.get("actor_type", "?")
+    actor_id = actor.get("actor_id")
+    mode = actor.get("bypass_mode", "always")
+    if actor_type == "RepositoryRole":
+        base = "admin (role)" if actor_id == 5 else f"role id={actor_id}"
+    elif actor_type == "Integration":
+        base = f"app id={actor_id}"
+    elif actor_type == "Team":
+        base = f"team id={actor_id}"
+    elif actor_type == "OrganizationAdmin":
+        base = "org admin"
+    else:
+        base = f"{actor_type} id={actor_id}"
+    return f"{base}, {mode}"
+
+
+def parse_ruleset_details(data: dict[str, Any]) -> RulesetDetails:
+    """Map GET repos/{r}/rulesets/{id} to a model."""
+    ref = (data.get("conditions") or {}).get("ref_name") or {}
+    return RulesetDetails(
+        id=data["id"],
+        name=data["name"],
+        enforcement=data["enforcement"],
+        target=data.get("target", "branch"),
+        include=ref.get("include", []),
+        exclude=ref.get("exclude", []),
+        rules=[rule["type"] for rule in data.get("rules", [])],
+        bypass=[format_bypass_actor(a) for a in data.get("bypass_actors", [])],
+    )
 
 
 MAX_CONCURRENCY = 8
