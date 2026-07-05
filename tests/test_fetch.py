@@ -71,6 +71,22 @@ async def test_fetch_repo_error_isolated(
     assert states[1].name == "o/missing"
 
 
+@pytest.mark.anyio
+async def test_fetch_repo_unexpected_shape_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    malformed = dict(RESPONSES)
+    malformed["repos/o/r/pulls?state=open&per_page=100"] = [{"number": 1}]
+    malformed["repos/o/r2/pulls?state=open&per_page=100"] = []
+    malformed["repos/o/r2/branches?per_page=100"] = []
+    malformed["repos/o/r2/dependabot/alerts?state=open&per_page=100"] = []
+    monkeypatch.setattr(gh, "_gh_api", _fake_gh_api(malformed))
+    states = await gh.fetch_all(["o/r", "o/r2"])
+    assert states[0].error is not None
+    assert "KeyError" in states[0].error
+    assert states[1].error is None
+
+
 def test_gh_ready_missing_binary(monkeypatch: pytest.MonkeyPatch) -> None:
     def raise_fnf(*args: Any, **kwargs: Any) -> Any:
         raise FileNotFoundError
