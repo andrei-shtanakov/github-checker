@@ -122,6 +122,11 @@ class GithubCheckerApp(App[None]):
             table.add_row(*repo_row(state), key=state.name)
         if self._selected not in self._states:
             self._selected = states[0].name if states else None
+        if self._selected is not None:
+            row_index = next(
+                i for i, s in enumerate(states) if s.name == self._selected
+            )
+            table.move_cursor(row=row_index)
         self._show_details()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:

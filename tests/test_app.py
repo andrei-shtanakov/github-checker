@@ -95,3 +95,25 @@ async def test_app_renders_states(
         await pilot.pause()
         table = app.query_one(DataTable)
         assert table.row_count == 1
+
+
+@pytest.mark.anyio
+async def test_selection_survives_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r", "o/two"]))
+    second = STATE.model_copy(update={"name": "o/two"})
+    app = GithubCheckerApp(config_path)
+    async with app.run_test() as pilot:
+        app.apply_states([STATE, second])
+        await pilot.pause()
+        table = app.query_one(DataTable)
+        table.move_cursor(row=1)
+        await pilot.pause()
+        assert app._selected == "o/two"
+        app.apply_states([STATE, second])
+        await pilot.pause()
+        assert app._selected == "o/two"
+        assert table.cursor_coordinate.row == 1
