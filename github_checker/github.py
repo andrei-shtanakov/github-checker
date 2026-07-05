@@ -106,21 +106,32 @@ class GhError(Exception):
         self.message = message
 
 
-async def _gh_api(path: str) -> Any:
-    """Run `gh api <path>` and return parsed JSON."""
+async def _gh_api(
+    path: str, method: str = "GET", body: dict[str, Any] | None = None
+) -> Any:
+    """Run `gh api <path>` and return parsed JSON (None on empty output)."""
+    args = ["api", path]
+    if method != "GET":
+        args += ["-X", method]
+    stdin_data: bytes | None = None
+    if body is not None:
+        args += ["--input", "-"]
+        stdin_data = json.dumps(body).encode()
     proc = await asyncio.create_subprocess_exec(
         "gh",
-        "api",
-        path,
+        *args,
+        stdin=asyncio.subprocess.PIPE if stdin_data is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    stdout, stderr = await proc.communicate(stdin_data)
     if proc.returncode != 0:
         text = stderr.decode().strip()
         match = _HTTP_STATUS_RE.search(text)
         status = int(match.group(1)) if match else None
         raise GhError(status, text or "gh api failed")
+    if not stdout.strip():
+        return None
     return json.loads(stdout)
 
 
@@ -168,11 +179,19 @@ async def fetch_repo(name: str, sem: asyncio.Semaphore) -> RepoState:
             if err.status not in (403, 404):
                 raise
             alerts = None
+        try:
+            rulesets_json = await call(f"repos/{name}/rulesets?per_page=100")
+            rulesets: list[RulesetInfo] | None = [
+                parse_ruleset_info(item) for item in rulesets_json
+            ]
+        except GhError:
+            rulesets = None
         return RepoState(
             name=name,
             pulls=pulls,
             branches=parse_branches(branches_json),
             alerts=alerts,
+            rulesets=rulesets,
             updated_at=datetime.now(),
         )
     except GhError as err:
