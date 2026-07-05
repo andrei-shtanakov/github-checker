@@ -1,0 +1,6 @@
+repos = [
+    "andrei-shtanakov/atp-platform",
+    "andrei-shtanakov/Maestro",
+    "andrei-shtanakov/spec-runner",
+]
+refresh_seconds = 120
