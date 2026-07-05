@@ -14,6 +14,13 @@ def test_load_missing_creates_empty(tmp_path: Path) -> None:
     assert path.exists()
 
 
+def test_load_missing_creates_parent_dirs(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "dir" / "repos.toml"
+    config = load_config(path)
+    assert config.repos == []
+    assert path.exists()
+
+
 def test_save_load_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "repos.toml"
     save_config(path, Config(repos=["o/r"], refresh_seconds=30))

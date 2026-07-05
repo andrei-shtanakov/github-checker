@@ -19,7 +19,8 @@ def load_config(path: Path) -> Config:
 
 
 def save_config(path: Path, config: Config) -> None:
-    """Write *config* to *path* as TOML."""
+    """Write *config* to *path* as TOML, creating parent directories."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(tomli_w.dumps(config.model_dump()), encoding="utf-8")
 
 
