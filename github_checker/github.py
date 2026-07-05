@@ -275,5 +275,5 @@ async def copy_ruleset(src_repo: str, ruleset_id: int, dst_repo: str) -> None:
     except GhError as err:
         if err.status != 422:
             raise
-        body["name"] = f"{body['name']} (copy)"
-        await _gh_api(f"repos/{dst_repo}/rulesets", method="POST", body=body)
+        retry_body = {**body, "name": f"{body['name']} (copy)"}
+        await _gh_api(f"repos/{dst_repo}/rulesets", method="POST", body=retry_body)
