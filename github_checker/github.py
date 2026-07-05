@@ -122,7 +122,8 @@ async def fetch_repo(name: str, sem: asyncio.Semaphore) -> RepoState:
         )
     except GhError as err:
         return RepoState(name=name, error=err.message)
-    except Exception as err:  # noqa: BLE001 — isolation: one repo must not kill the batch
+    # Isolation: one repo must never kill the whole batch.
+    except Exception as err:
         return RepoState(name=name, error=f"{type(err).__name__}: {err}")
 
 
