@@ -12,12 +12,15 @@ class LocalGitError(Exception):
 
 def _git(path: Path, *args: str) -> str:
     """Run `git -C path *args`, returning stripped stdout or raising."""
-    result = subprocess.run(
-        ["git", "-C", str(path), *args],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as err:
+        raise LocalGitError(str(err)) from err
     if result.returncode != 0:
         raise LocalGitError(result.stderr.strip() or "git command failed")
     return result.stdout.strip()
@@ -48,8 +51,8 @@ def local_status(path: Path) -> LocalStatus:
             )
             behind_str, ahead_str = counts.split()
             behind, ahead = int(behind_str), int(ahead_str)
-        except LocalGitError:
-            pass  # no upstream configured
+        except (LocalGitError, ValueError):
+            pass  # no upstream configured or unexpected output
         return LocalStatus(
             branch=branch, ahead=ahead, behind=behind, dirty=dirty, error=None
         )
