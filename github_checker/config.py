@@ -6,7 +6,7 @@ from pathlib import Path
 
 import tomli_w
 
-from github_checker.models import Config
+from github_checker.models import Config, RepoRef
 
 
 def default_config_path() -> Path:
@@ -48,16 +48,17 @@ def load_config(path: Path) -> Config:
 def save_config(path: Path, config: Config) -> None:
     """Write *config* to *path* as TOML, creating parent directories."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomli_w.dumps(config.model_dump()), encoding="utf-8")
+    data = config.model_dump(mode="json", exclude_none=True)
+    path.write_text(tomli_w.dumps(data), encoding="utf-8")
 
 
 def add_repo(path: Path, name: str) -> Config:
     """Add *name* to the config file; duplicates are ignored."""
     config = load_config(path)
-    if name in config.repos:
+    if any(ref.name == name for ref in config.repos):
         return config
     updated = Config(
-        repos=[*config.repos, name],
+        repos=[*config.repos, RepoRef(name=name)],
         refresh_seconds=config.refresh_seconds,
     )
     save_config(path, updated)
@@ -68,7 +69,7 @@ def remove_repo(path: Path, name: str) -> Config:
     """Remove *name* from the config file if present."""
     config = load_config(path)
     updated = config.model_copy(
-        update={"repos": [r for r in config.repos if r != name]}
+        update={"repos": [ref for ref in config.repos if ref.name != name]}
     )
     save_config(path, updated)
     return updated

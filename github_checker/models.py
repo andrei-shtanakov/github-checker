@@ -2,25 +2,39 @@
 
 import re
 from datetime import datetime
+from pathlib import Path
 
 from pydantic import BaseModel, field_validator
 
 REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
 
 
+class RepoRef(BaseModel):
+    """A tracked repository: owner/repo plus an optional local clone path."""
+
+    name: str
+    path: Path | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        if not REPO_RE.match(value):
+            raise ValueError(f"invalid repo (expected owner/repo): {value!r}")
+        return value
+
+
 class Config(BaseModel):
     """Application configuration stored in repos.toml."""
 
-    repos: list[str] = []
+    repos: list[RepoRef] = []
     refresh_seconds: int = 120
 
-    @field_validator("repos")
+    @field_validator("repos", mode="before")
     @classmethod
-    def _validate_repos(cls, value: list[str]) -> list[str]:
-        for repo in value:
-            if not REPO_RE.match(repo):
-                raise ValueError(f"invalid repo (expected owner/repo): {repo!r}")
-        return value
+    def _coerce_repos(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        return [{"name": item} if isinstance(item, str) else item for item in value]
 
 
 class Branch(BaseModel):
@@ -69,6 +83,16 @@ class RulesetDetails(BaseModel):
     bypass: list[str]
 
 
+class LocalStatus(BaseModel):
+    """State of a local clone relative to its upstream."""
+
+    branch: str | None
+    ahead: int | None
+    behind: int | None
+    dirty: bool
+    error: str | None = None
+
+
 class RepoState(BaseModel):
     """Everything the TUI shows about one repository."""
 
@@ -79,3 +103,5 @@ class RepoState(BaseModel):
     rulesets: list[RulesetInfo] | None = None
     error: str | None = None
     updated_at: datetime | None = None
+    path: Path | None = None
+    local: LocalStatus | None = None

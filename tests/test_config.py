@@ -11,7 +11,7 @@ from github_checker.config import (
     resolve_config_path,
     save_config,
 )
-from github_checker.models import Config
+from github_checker.models import Config, RepoRef
 
 
 def test_default_config_path_respects_xdg(
@@ -36,8 +36,8 @@ def test_resolve_config_path_migrates_legacy(
     save_config(workdir / "repos.toml", Config(repos=["o/legacy"]))
     resolved = resolve_config_path(None)
     assert resolved == tmp_path / "xdg" / "github-checker" / "repos.toml"
-    assert load_config(resolved).repos == ["o/legacy"]
-    assert not (workdir / "repos.toml").exists()  # legacy removed after move
+    assert [r.name for r in load_config(resolved).repos] == ["o/legacy"]
+    assert not (workdir / "repos.toml").exists()
 
 
 def test_resolve_config_path_existing_target_not_overwritten(
@@ -51,7 +51,7 @@ def test_resolve_config_path_existing_target_not_overwritten(
     save_config(target, Config(repos=["o/mine"]))
     save_config(workdir / "repos.toml", Config(repos=["o/legacy"]))
     resolved = resolve_config_path(None)
-    assert load_config(resolved).repos == ["o/mine"]
+    assert [r.name for r in load_config(resolved).repos] == ["o/mine"]
 
 
 def test_load_missing_creates_empty(tmp_path: Path) -> None:
@@ -72,22 +72,38 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "repos.toml"
     save_config(path, Config(repos=["o/r"], refresh_seconds=30))
     loaded = load_config(path)
-    assert loaded.repos == ["o/r"]
+    assert [r.name for r in loaded.repos] == ["o/r"]
+    assert loaded.repos[0].path is None
     assert loaded.refresh_seconds == 30
+
+
+def test_save_load_roundtrip_with_path(tmp_path: Path) -> None:
+    path = tmp_path / "repos.toml"
+    ref = RepoRef(name="o/r", path=Path("/tmp/o-r"))
+    save_config(path, Config(repos=[ref]))
+    loaded = load_config(path)
+    assert loaded.repos == [ref]
 
 
 def test_add_repo(tmp_path: Path) -> None:
     path = tmp_path / "repos.toml"
     save_config(path, Config(repos=["o/r"]))
     config = add_repo(path, "o/two")
-    assert config.repos == ["o/r", "o/two"]
-    assert load_config(path).repos == ["o/r", "o/two"]
+    assert [r.name for r in config.repos] == ["o/r", "o/two"]
+    assert [r.name for r in load_config(path).repos] == ["o/r", "o/two"]
+
+
+def test_add_repo_preserves_existing_path(tmp_path: Path) -> None:
+    path = tmp_path / "repos.toml"
+    save_config(path, Config(repos=[RepoRef(name="o/r", path=Path("/tmp/o-r"))]))
+    config = add_repo(path, "o/two")
+    assert config.repos[0].path == Path("/tmp/o-r")
 
 
 def test_add_repo_duplicate_noop(tmp_path: Path) -> None:
     path = tmp_path / "repos.toml"
     save_config(path, Config(repos=["o/r"]))
-    assert add_repo(path, "o/r").repos == ["o/r"]
+    assert [r.name for r in add_repo(path, "o/r").repos] == ["o/r"]
 
 
 def test_add_repo_invalid_raises(tmp_path: Path) -> None:
@@ -101,5 +117,5 @@ def test_remove_repo(tmp_path: Path) -> None:
     path = tmp_path / "repos.toml"
     save_config(path, Config(repos=["o/r", "o/two"]))
     config = remove_repo(path, "o/r")
-    assert config.repos == ["o/two"]
-    assert load_config(path).repos == ["o/two"]
+    assert [r.name for r in config.repos] == ["o/two"]
+    assert [r.name for r in load_config(path).repos] == ["o/two"]

@@ -1,20 +1,25 @@
 """Textual dashboard application."""
 
+import asyncio
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import ValidationError
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
 
+from github_checker import localgit
 from github_checker.config import add_repo, load_config, remove_repo
 from github_checker.github import fetch_all
-from github_checker.models import RepoState, RulesetInfo
+from github_checker.models import LocalStatus, RepoRef, RepoState, RulesetInfo
 from github_checker.protection import ProtectionScreen
 
 COLUMNS = ("Repo", "PRs", "Bot", "Branches", "Alerts", "Rules", "Copilot", "Updated")
+GITHUB_URL = "https://github.com/{name}"
 
 _COPILOT_STATE_LABELS = {
     "APPROVED": "approved",
@@ -59,11 +64,33 @@ def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str, str]:
     )
 
 
+def local_line(local: LocalStatus) -> str:
+    """One-line desync summary for the details pane."""
+    if local.error:
+        return f"  ERROR: {local.error}"
+    parts = [local.branch or "?"]
+    if local.ahead is None or local.behind is None:
+        parts.append("no upstream")
+    elif local.ahead == 0 and local.behind == 0:
+        parts.append("up to date")
+    else:
+        parts.append(f"↑{local.ahead} ↓{local.behind}")
+    if local.dirty:
+        parts.append("dirty")
+    return "  " + "  ".join(parts)
+
+
 def details_text(state: RepoState) -> str:
     """Plain-text details panel for one repository."""
+    url = GITHUB_URL.format(name=state.name)
     if state.error:
-        return f"{state.name}\n\nERROR: {state.error}"
-    lines = [state.name, "", "Pull requests:"]
+        return "\n".join([state.name, "", url, "", f"ERROR: {state.error}"])
+    lines = [state.name, url]
+    if state.path is not None:
+        lines += ["", f"Local: {state.path}"]
+        if state.local is not None:
+            lines.append(local_line(state.local))
+    lines += ["", "Pull requests:"]
     if not state.pulls:
         lines.append("  (none)")
     for pull in state.pulls:
@@ -81,6 +108,19 @@ def details_text(state: RepoState) -> str:
         lines.append("  (none)")
     lines += [f"  {branch.name}" for branch in state.branches]
     return "\n".join(lines)
+
+
+def details_content(state: RepoState) -> Text:
+    """Rich Text of the details panel with the GitHub URL as a click link."""
+    url = GITHUB_URL.format(name=state.name)
+    text = Text()
+    for line in details_text(state).split("\n"):
+        if line == url:
+            text.append(line, style=f"link {url}")
+        else:
+            text.append(line)
+        text.append("\n")
+    return text
 
 
 class AddRepoScreen(ModalScreen[str | None]):
@@ -148,6 +188,8 @@ class GithubCheckerApp(App[None]):
         ("a", "add_repo", "Add repo"),
         ("d", "remove_repo", "Remove repo"),
         ("p", "protection", "Rulesets"),
+        ("s", "sync", "Sync"),
+        ("S", "pull", "Pull"),
         ("q", "quit", "Quit"),
     ]
 
@@ -215,13 +257,13 @@ class GithubCheckerApp(App[None]):
         if state is None:
             details.update("Нет репозиториев. Нажмите 'a', чтобы добавить.")
             return
-        details.update(details_text(state))
+        details.update(details_content(state))
 
     def action_add_repo(self) -> None:
         def handle_result(name: str | None) -> None:
             if not name:
                 return
-            if name in self._config.repos:
+            if any(ref.name == name for ref in self._config.repos):
                 self.notify(f"{name} уже в списке", severity="information")
                 return
             try:
@@ -274,4 +316,46 @@ class GithubCheckerApp(App[None]):
             current.rulesets = rulesets
             self.apply_states(list(self._states.values()))
 
-        self.push_screen(ProtectionScreen(name, self._config.repos), handle_result)
+        self.push_screen(
+            ProtectionScreen(name, [r.name for r in self._config.repos]),
+            handle_result,
+        )
+
+    def _selected_ref(self) -> RepoRef | None:
+        if self._selected is None:
+            return None
+        return next((r for r in self._config.repos if r.name == self._selected), None)
+
+    def action_sync(self) -> None:
+        """Fetch the selected clone from its remote."""
+        self._run_local(localgit.fetch, "fetch")
+
+    def action_pull(self) -> None:
+        """Fast-forward-only pull of the selected clone."""
+        self._run_local(localgit.pull_ff_only, "pull")
+
+    def _run_local(self, op: Callable[[Path], None], label: str) -> None:
+        ref = self._selected_ref()
+        if ref is None or ref.path is None:
+            self.notify("локальный путь не задан", severity="warning")
+            return
+        self.run_worker(
+            self._do_local(op, label, ref.name, ref.path),
+            group="local",
+            exclusive=False,
+        )
+
+    async def _do_local(
+        self, op: Callable[[Path], None], label: str, name: str, path: Path
+    ) -> None:
+        try:
+            await asyncio.to_thread(op, path)
+        except localgit.LocalGitError as err:
+            self.notify(f"{label} не удался: {err}", severity="error")
+            return
+        status = await asyncio.to_thread(localgit.local_status, path)
+        state = self._states.get(name)
+        if state is not None:
+            state.local = status
+            self.apply_states(list(self._states.values()))
+        self.notify(f"{label}: {name} обновлён")
