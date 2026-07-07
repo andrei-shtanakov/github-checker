@@ -13,7 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
 
 from github_checker import localgit
-from github_checker.config import add_repo, load_config, remove_repo
+from github_checker.config import add_repo, load_config, remove_repo, set_path
 from github_checker.github import fetch_all
 from github_checker.models import LocalStatus, RepoRef, RepoState, RulesetInfo
 from github_checker.protection import ProtectionScreen
@@ -151,6 +151,39 @@ class AddRepoScreen(ModalScreen[str | None]):
             self.dismiss(None)
 
 
+class SetPathScreen(ModalScreen[str | None]):
+    """Prompt for a local clone path; empty means clear, cancel means no change."""
+
+    CSS = """
+    SetPathScreen { align: center middle; }
+    #dialog { width: 70; height: auto; border: thick $accent; padding: 1 2; }
+    #dialog Horizontal { height: auto; align-horizontal: right; }
+    """
+
+    def __init__(self, current: str) -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Путь к локальному клону (пусто — очистить):")
+            yield Input(
+                value=self._current, placeholder="/path/to/clone", id="path-input"
+            )
+            with Horizontal():
+                yield Button("Save", variant="primary", id="ok")
+                yield Button("Cancel", id="cancel")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip())
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "ok":
+            self.dismiss(self.query_one("#path-input", Input).value.strip())
+        else:
+            self.dismiss(None)
+
+
 class ConfirmScreen(ModalScreen[bool]):
     """Yes/no confirmation dialog."""
 
@@ -187,6 +220,7 @@ class GithubCheckerApp(App[None]):
         ("r", "refresh", "Refresh"),
         ("a", "add_repo", "Add repo"),
         ("d", "remove_repo", "Remove repo"),
+        ("l", "set_path", "Set path"),
         ("p", "protection", "Rulesets"),
         ("s", "sync", "Sync"),
         ("S", "pull", "Pull"),
@@ -291,6 +325,30 @@ class GithubCheckerApp(App[None]):
             self.action_refresh()
 
         self.push_screen(ConfirmScreen(f"Удалить {name}?"), handle_result)
+
+    def action_set_path(self) -> None:
+        """Set, change, or clear the local clone path of the selected repo."""
+        ref = self._selected_ref()
+        if ref is None:
+            return
+        name = ref.name
+        current = str(ref.path) if ref.path is not None else ""
+
+        def handle_result(result: str | None) -> None:
+            if result is None:
+                return
+            if result == "":
+                self._config = set_path(self._config_path, name, None)
+                self.action_refresh()
+                return
+            path = Path(result).expanduser()
+            if not localgit.is_git_repo(path):
+                self.notify(f"Не git-репозиторий: {path}", severity="error")
+                return
+            self._config = set_path(self._config_path, name, path)
+            self.action_refresh()
+
+        self.push_screen(SetPathScreen(current), handle_result)
 
     def action_protection(self) -> None:
         name = self._selected

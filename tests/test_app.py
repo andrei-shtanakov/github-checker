@@ -2,7 +2,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Input
 
 import github_checker.app as app_module
 from github_checker.app import (
@@ -283,3 +283,76 @@ async def test_sync_without_path_warns(
         await pilot.pause()
         assert any("локальный путь" in n for n in notes)
         assert app._states["o/r"].local is None
+
+
+@pytest.mark.anyio
+async def test_set_path_writes_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    monkeypatch.setattr(app_module.localgit, "is_git_repo", lambda path: True)
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r"]))
+    app = GithubCheckerApp(config_path)
+    clone = tmp_path / "clone"
+    async with app.run_test() as pilot:
+        app.apply_states([STATE.model_copy(update={"name": "o/r"})])
+        await pilot.pause()
+        await pilot.press("l")
+        await pilot.pause()
+        await pilot.press(*str(clone))
+        await pilot.press("enter")
+        await pilot.pause()
+    from github_checker.config import load_config
+
+    assert load_config(config_path).repos[0].path == clone
+
+
+@pytest.mark.anyio
+async def test_set_path_rejects_non_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    monkeypatch.setattr(app_module.localgit, "is_git_repo", lambda path: False)
+    notes: list[str] = []
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r"]))
+    app = GithubCheckerApp(config_path)
+    async with app.run_test() as pilot:
+        app.apply_states([STATE.model_copy(update={"name": "o/r"})])
+        await pilot.pause()
+        monkeypatch.setattr(app, "notify", lambda *a, **k: notes.append(a[0]))
+        await pilot.press("l")
+        await pilot.pause()
+        await pilot.press(*str(tmp_path / "plain"))
+        await pilot.press("enter")
+        await pilot.pause()
+    from github_checker.config import load_config
+
+    assert load_config(config_path).repos[0].path is None
+    assert any("git" in n for n in notes)
+
+
+@pytest.mark.anyio
+async def test_set_path_clears_when_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    config_path = tmp_path / "repos.toml"
+    save_config(
+        config_path,
+        Config(repos=[RepoRef(name="o/r", path=tmp_path / "clone")]),
+    )
+    app = GithubCheckerApp(config_path)
+    async with app.run_test() as pilot:
+        app.apply_states([STATE.model_copy(update={"name": "o/r"})])
+        await pilot.pause()
+        await pilot.press("l")
+        await pilot.pause()
+        app.screen.query_one("#path-input", Input).value = ""
+        await pilot.pause()
+        await pilot.click("#ok")
+        await pilot.pause()
+    from github_checker.config import load_config
+
+    assert load_config(config_path).repos[0].path is None
