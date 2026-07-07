@@ -1,6 +1,11 @@
-repos = [
-    "andrei-shtanakov/atp-platform",
-    "andrei-shtanakov/Maestro",
-    "andrei-shtanakov/spec-runner",
-]
 refresh_seconds = 120
+
+# A repository with a local clone: `s` fetches it, `S` does an ff-only pull,
+# and the details pane shows ↑ahead / ↓behind / dirty vs its upstream.
+[[repos]]
+name = "andrei-shtanakov/atp-platform"
+path = "/Users/you/labs/atp-platform"
+
+# Remote-only: just a clickable link and PR/branch/ruleset status.
+[[repos]]
+name = "andrei-shtanakov/Maestro"
