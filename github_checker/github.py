@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import subprocess
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -216,7 +217,7 @@ async def fetch_repo(ref: RepoRef, sem: asyncio.Semaphore) -> RepoState:
         )
 
 
-async def fetch_all(repos: list[RepoRef | str]) -> list[RepoState]:
+async def fetch_all(repos: Sequence[RepoRef | str]) -> list[RepoState]:
     """Fetch all repositories concurrently (bounded by MAX_CONCURRENCY)."""
     refs = [r if isinstance(r, RepoRef) else RepoRef(name=r) for r in repos]
     sem = asyncio.Semaphore(MAX_CONCURRENCY)

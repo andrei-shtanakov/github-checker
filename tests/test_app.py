@@ -5,12 +5,19 @@ import pytest
 from textual.widgets import DataTable
 
 import github_checker.app as app_module
-from github_checker.app import GithubCheckerApp, details_text, repo_row
+from github_checker.app import (
+    GithubCheckerApp,
+    details_content,
+    details_text,
+    local_line,
+    repo_row,
+)
 from github_checker.config import save_config
 from github_checker.models import (
     Branch,
     Config,
     CopilotReview,
+    LocalStatus,
     PullRequest,
     RepoState,
     RulesetInfo,
@@ -80,6 +87,41 @@ def test_details_text_error() -> None:
     assert "boom" in text
 
 
+def test_details_text_includes_link() -> None:
+    assert "https://github.com/o/r" in details_text(STATE)
+
+
+def test_details_content_has_link_span() -> None:
+    content = details_content(STATE)
+    url = "https://github.com/o/r"
+    assert url in content.plain
+    assert any(span.style == f"link {url}" for span in content.spans)
+
+
+def test_local_line_variants() -> None:
+    up = LocalStatus(branch="main", ahead=0, behind=0, dirty=False)
+    assert "up to date" in local_line(up)
+    none = LocalStatus(branch="main", ahead=None, behind=None, dirty=False)
+    assert "no upstream" in local_line(none)
+    desync = LocalStatus(branch="main", ahead=2, behind=1, dirty=True)
+    assert "↑2" in local_line(desync) and "↓1" in local_line(desync)
+    assert "dirty" in local_line(desync)
+    err = LocalStatus(branch=None, ahead=None, behind=None, dirty=False, error="boom")
+    assert "boom" in local_line(err)
+
+
+def test_details_text_shows_local_block() -> None:
+    state = STATE.model_copy(
+        update={
+            "path": Path("/tmp/o-r"),
+            "local": LocalStatus(branch="main", ahead=2, behind=1, dirty=False),
+        }
+    )
+    text = details_text(state)
+    assert "Local: /tmp/o-r" in text
+    assert "↑2 ↓1" in text
+
+
 async def _noop_fetch_all(repos: list[str]) -> list[RepoState]:
     return []
 
@@ -133,7 +175,7 @@ async def test_action_refresh_survives_invalid_toml(
         config_path.write_text("repos = [", encoding="utf-8")
         app.action_refresh()
         await pilot.pause()
-        assert app._config.repos == ["o/r"]
+        assert [r.name for r in app._config.repos] == ["o/r"]
 
 
 @pytest.mark.anyio
@@ -152,7 +194,7 @@ async def test_add_repo_writes_config(
         await pilot.pause()
     from github_checker.config import load_config
 
-    assert load_config(config_path).repos == ["o/r", "o/new"]
+    assert [r.name for r in load_config(config_path).repos] == ["o/r", "o/new"]
 
 
 @pytest.mark.anyio
