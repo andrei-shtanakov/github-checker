@@ -19,6 +19,7 @@ from github_checker.models import (
     CopilotReview,
     LocalStatus,
     PullRequest,
+    RepoRef,
     RepoState,
     RulesetInfo,
 )
@@ -235,3 +236,50 @@ def test_rules_cell_variants() -> None:
 def test_repo_row_rules_column() -> None:
     state = STATE.model_copy(update={"rulesets": [_ri(1, "active")]})
     assert repo_row(state)[5] == "✓1"
+
+
+@pytest.mark.anyio
+async def test_sync_updates_local_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    monkeypatch.setattr(app_module.localgit, "fetch", lambda path: None)
+    monkeypatch.setattr(
+        app_module.localgit,
+        "local_status",
+        lambda path: LocalStatus(
+            branch="main", ahead=0, behind=0, dirty=False, error=None
+        ),
+    )
+    config_path = tmp_path / "repos.toml"
+    save_config(
+        config_path,
+        Config(repos=[RepoRef(name="o/r", path=tmp_path / "clone")]),
+    )
+    app = GithubCheckerApp(config_path)
+    async with app.run_test() as pilot:
+        app.apply_states([STATE.model_copy(update={"name": "o/r"})])
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+        assert app._states["o/r"].local is not None
+        assert app._states["o/r"].local.branch == "main"
+
+
+@pytest.mark.anyio
+async def test_sync_without_path_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    notes: list[str] = []
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r"]))
+    app = GithubCheckerApp(config_path)
+    async with app.run_test() as pilot:
+        app.apply_states([STATE.model_copy(update={"name": "o/r"})])
+        await pilot.pause()
+        monkeypatch.setattr(app, "notify", lambda *a, **k: notes.append(a[0]))
+        await pilot.press("s")
+        await pilot.pause()
+        assert any("локальный путь" in n for n in notes)
+        assert app._states["o/r"].local is None
