@@ -7,10 +7,12 @@ import subprocess
 from datetime import datetime
 from typing import Any
 
+from github_checker.localgit import local_status
 from github_checker.models import (
     Branch,
     CopilotReview,
     PullRequest,
+    RepoRef,
     RepoState,
     RulesetDetails,
     RulesetInfo,
@@ -135,8 +137,14 @@ async def _gh_api(
     return json.loads(stdout)
 
 
-async def fetch_repo(name: str, sem: asyncio.Semaphore) -> RepoState:
+async def fetch_repo(ref: RepoRef, sem: asyncio.Semaphore) -> RepoState:
     """Fetch full state of one repository; errors go into RepoState.error."""
+    name = ref.name
+    local = (
+        await asyncio.to_thread(local_status, ref.path)
+        if ref.path is not None
+        else None
+    )
 
     async def call(path: str) -> Any:
         async with sem:
@@ -188,6 +196,8 @@ async def fetch_repo(name: str, sem: asyncio.Semaphore) -> RepoState:
             rulesets = None
         return RepoState(
             name=name,
+            path=ref.path,
+            local=local,
             pulls=pulls,
             branches=parse_branches(branches_json),
             alerts=alerts,
@@ -195,16 +205,22 @@ async def fetch_repo(name: str, sem: asyncio.Semaphore) -> RepoState:
             updated_at=datetime.now(),
         )
     except GhError as err:
-        return RepoState(name=name, error=err.message)
+        return RepoState(name=name, path=ref.path, local=local, error=err.message)
     # Isolation: one repo must never kill the whole batch.
     except Exception as err:
-        return RepoState(name=name, error=f"{type(err).__name__}: {err}")
+        return RepoState(
+            name=name,
+            path=ref.path,
+            local=local,
+            error=f"{type(err).__name__}: {err}",
+        )
 
 
-async def fetch_all(repos: list[str]) -> list[RepoState]:
+async def fetch_all(repos: list[RepoRef | str]) -> list[RepoState]:
     """Fetch all repositories concurrently (bounded by MAX_CONCURRENCY)."""
+    refs = [r if isinstance(r, RepoRef) else RepoRef(name=r) for r in repos]
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
-    return list(await asyncio.gather(*(fetch_repo(r, sem) for r in repos)))
+    return list(await asyncio.gather(*(fetch_repo(r, sem) for r in refs)))
 
 
 def gh_ready() -> str | None:

@@ -1,9 +1,11 @@
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 import github_checker.github as gh
+from github_checker.models import LocalStatus, RepoRef
 from tests.fixtures import (
     ALERTS,
     BRANCHES,
@@ -161,3 +163,32 @@ async def test_fetch_repo_rulesets_forbidden(
     state = (await gh.fetch_all(["o/r"]))[0]
     assert state.error is None
     assert state.rulesets is None
+
+
+@pytest.mark.anyio
+async def test_fetch_repo_attaches_local_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gh, "_gh_api", _fake_gh_api(RESPONSES))
+    monkeypatch.setattr(
+        gh,
+        "local_status",
+        lambda path: LocalStatus(
+            branch="main", ahead=1, behind=0, dirty=False, error=None
+        ),
+    )
+    ref = RepoRef(name="o/r", path=Path("/tmp/o-r"))
+    state = (await gh.fetch_all([ref]))[0]
+    assert state.path == Path("/tmp/o-r")
+    assert state.local is not None
+    assert state.local.ahead == 1
+
+
+@pytest.mark.anyio
+async def test_fetch_repo_no_path_has_no_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gh, "_gh_api", _fake_gh_api(RESPONSES))
+    state = (await gh.fetch_all(["o/r"]))[0]
+    assert state.path is None
+    assert state.local is None
