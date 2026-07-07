@@ -10,6 +10,7 @@ from github_checker.config import (
     remove_repo,
     resolve_config_path,
     save_config,
+    set_path,
 )
 from github_checker.models import Config, RepoRef
 
@@ -119,3 +120,28 @@ def test_remove_repo(tmp_path: Path) -> None:
     config = remove_repo(path, "o/r")
     assert [r.name for r in config.repos] == ["o/two"]
     assert [r.name for r in load_config(path).repos] == ["o/two"]
+
+
+def test_set_path_sets_and_clears(tmp_path: Path) -> None:
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r"]))
+    clone = tmp_path / "clone"
+
+    updated = set_path(config_path, "o/r", clone)
+    assert updated.repos[0].path == clone
+    assert load_config(config_path).repos[0].path == clone
+
+    changed = tmp_path / "other"
+    set_path(config_path, "o/r", changed)
+    assert load_config(config_path).repos[0].path == changed
+
+    set_path(config_path, "o/r", None)
+    assert load_config(config_path).repos[0].path is None
+
+
+def test_set_path_unknown_name_is_noop(tmp_path: Path) -> None:
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r"]))
+    updated = set_path(config_path, "o/missing", tmp_path / "x")
+    assert [r.name for r in updated.repos] == ["o/r"]
+    assert updated.repos[0].path is None

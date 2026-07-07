@@ -73,3 +73,18 @@ def remove_repo(path: Path, name: str) -> Config:
     )
     save_config(path, updated)
     return updated
+
+
+def set_path(path: Path, name: str, repo_path: Path | None) -> Config:
+    """Set or clear the local clone path of *name*; save and return config."""
+    config = load_config(path)
+    updated = config.model_copy(
+        update={
+            "repos": [
+                ref.model_copy(update={"path": repo_path}) if ref.name == name else ref
+                for ref in config.repos
+            ]
+        }
+    )
+    save_config(path, updated)
+    return updated

@@ -62,6 +62,17 @@ def local_status(path: Path) -> LocalStatus:
         )
 
 
+def is_git_repo(path: Path) -> bool:
+    """True if *path* exists and is a git work tree (clone/worktree/submodule)."""
+    if not path.exists():
+        return False
+    try:
+        _git(path, "rev-parse", "--git-dir")
+    except LocalGitError:
+        return False
+    return True
+
+
 def fetch(path: Path) -> None:
     """Run `git fetch --prune`; raises LocalGitError on failure."""
     _git(path, "fetch", "--prune")

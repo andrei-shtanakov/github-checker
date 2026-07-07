@@ -6,6 +6,7 @@ import pytest
 from github_checker.localgit import (
     LocalGitError,
     fetch,
+    is_git_repo,
     local_status,
     pull_ff_only,
 )
@@ -107,6 +108,20 @@ def test_git_binary_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert status.branch is None
     with pytest.raises(LocalGitError):
         fetch(repo)
+
+
+def test_is_git_repo_true_for_clone(tmp_path: Path) -> None:
+    repo = tmp_path / "clone"
+    _init_repo(repo)
+    assert is_git_repo(repo) is True
+
+
+def test_is_git_repo_false_for_plain_dir(tmp_path: Path) -> None:
+    assert is_git_repo(tmp_path) is False
+
+
+def test_is_git_repo_false_for_missing_path(tmp_path: Path) -> None:
+    assert is_git_repo(tmp_path / "nope") is False
 
 
 def test_pull_ff_only_divergence_raises(tmp_path: Path) -> None:
