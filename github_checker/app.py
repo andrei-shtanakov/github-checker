@@ -341,7 +341,7 @@ class GithubCheckerApp(App[None]):
                 self._config = set_path(self._config_path, name, None)
                 self.action_refresh()
                 return
-            path = Path(result).expanduser()
+            path = Path(result).expanduser().resolve()
             if not localgit.is_git_repo(path):
                 self.notify(f"Не git-репозиторий: {path}", severity="error")
                 return
