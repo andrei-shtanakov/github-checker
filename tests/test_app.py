@@ -356,3 +356,31 @@ async def test_set_path_clears_when_empty(
     from github_checker.config import load_config
 
     assert load_config(config_path).repos[0].path is None
+
+
+@pytest.mark.anyio
+async def test_set_path_normalizes_relative_to_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, "fetch_all", _noop_fetch_all)
+    monkeypatch.setattr(app_module.localgit, "is_git_repo", lambda path: True)
+    config_path = tmp_path / "repos.toml"
+    save_config(config_path, Config(repos=["o/r"]))
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    app = GithubCheckerApp(config_path)
+    async with app.run_test() as pilot:
+        app.apply_states([STATE.model_copy(update={"name": "o/r"})])
+        await pilot.pause()
+        await pilot.press("l")
+        await pilot.pause()
+        await pilot.press(*"../Maestro")
+        await pilot.press("enter")
+        await pilot.pause()
+    from github_checker.config import load_config
+
+    stored = load_config(config_path).repos[0].path
+    assert stored is not None
+    assert stored.is_absolute()
+    assert stored == (workdir / ".." / "Maestro").resolve()
