@@ -73,6 +73,14 @@ def is_git_repo(path: Path) -> bool:
     return True
 
 
+def remote_url(path: Path, name: str = "origin") -> str | None:
+    """URL of a remote, or None if the remote is not configured."""
+    try:
+        return _git(path, "remote", "get-url", name)
+    except LocalGitError:
+        return None
+
+
 def fetch(path: Path) -> None:
     """Run `git fetch --prune`; raises LocalGitError on failure."""
     _git(path, "fetch", "--prune")

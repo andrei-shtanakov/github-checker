@@ -40,6 +40,22 @@ REVIEW_COMMENTS: list[dict[str, Any]] = [
     {"user": {"login": "some-human"}, "body": "lgtm"},
 ]
 
+ISSUES: list[dict[str, Any]] = [
+    {
+        "number": 7,
+        "title": "Flaky test on CI",
+        "user": {"login": "andrei-shtanakov"},
+        "labels": [{"name": "bug"}, {"name": "ci"}],
+    },
+    {
+        "number": 42,
+        "title": "Add feature X",
+        "user": {"login": "andrei-shtanakov"},
+        "labels": [],
+        "pull_request": {"url": "https://api.github.com/repos/o/r/pulls/42"},
+    },
+]
+
 ALERTS: list[dict[str, Any]] = [
     {"number": 1, "state": "open"},
     {"number": 2, "state": "open"},
