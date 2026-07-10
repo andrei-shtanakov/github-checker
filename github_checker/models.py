@@ -61,6 +61,15 @@ class PullRequest(BaseModel):
     copilot_review: CopilotReview | None = None
 
 
+class Issue(BaseModel):
+    """An open issue (pull requests excluded)."""
+
+    number: int
+    title: str
+    author: str
+    labels: list[str] = []
+
+
 class RulesetInfo(BaseModel):
     """Item of GET repos/{r}/rulesets."""
 
@@ -98,6 +107,7 @@ class RepoState(BaseModel):
 
     name: str
     pulls: list[PullRequest] = []
+    issues: list[Issue] | None = None
     branches: list[Branch] = []
     alerts: int | None = None
     rulesets: list[RulesetInfo] | None = None

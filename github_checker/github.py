@@ -12,6 +12,7 @@ from github_checker.localgit import local_status
 from github_checker.models import (
     Branch,
     CopilotReview,
+    Issue,
     PullRequest,
     RepoRef,
     RepoState,
@@ -33,6 +34,20 @@ def parse_pull(data: dict[str, Any]) -> PullRequest:
         head_branch=data["head"]["ref"],
         is_dependabot=login == DEPENDABOT_LOGIN,
     )
+
+
+def parse_issues(data: list[dict[str, Any]]) -> list[Issue]:
+    """Map GET repos/{r}/issues to models, skipping pull requests."""
+    return [
+        Issue(
+            number=item["number"],
+            title=item["title"],
+            author=item["user"]["login"],
+            labels=[label["name"] for label in item.get("labels", [])],
+        )
+        for item in data
+        if "pull_request" not in item
+    ]
 
 
 def parse_branches(data: list[dict[str, Any]]) -> list[Branch]:
@@ -195,11 +210,17 @@ async def fetch_repo(ref: RepoRef, sem: asyncio.Semaphore) -> RepoState:
             ]
         except GhError:
             rulesets = None
+        try:
+            issues_json = await call(f"repos/{name}/issues?state=open&per_page=100")
+            issues: list[Issue] | None = parse_issues(issues_json)
+        except GhError:
+            issues = None
         return RepoState(
             name=name,
             path=ref.path,
             local=local,
             pulls=pulls,
+            issues=issues,
             branches=parse_branches(branches_json),
             alerts=alerts,
             rulesets=rulesets,

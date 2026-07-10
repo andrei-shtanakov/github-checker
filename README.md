@@ -13,6 +13,18 @@ TUI-дашборд состояния нескольких GitHub-репозит
     uv run github-checker            # конфиг ~/.config/github-checker/repos.toml
     uv run github-checker --config path/to/repos.toml
 
+## Headless-режим (для агентов и скриптов)
+
+    uv run github-checker snapshot --workspace ..              # весь polyrepo-workspace
+    uv run github-checker snapshot --workspace .. --local-only # без GitHub API
+
+Обходит `<workspace>/*/.git` (конфиг не нужен) и печатает JSON: локальный
+git-статус каждого репо (ветка, ahead/behind, dirty) плюс, если `gh`
+авторизован, открытые PRы, issues, security alerts и rulesets. Без `gh`
+деградирует до git-only и пишет причину в поле `gh_error`; поле `host`
+помечает, чьи локальные клоны описаны. Потребитель — скилл `fleet-check`
+в `devtools/`.
+
 ## Клавиши
 
 | Клавиша | Действие |

@@ -9,6 +9,7 @@ from github_checker.models import LocalStatus, RepoRef
 from tests.fixtures import (
     ALERTS,
     BRANCHES,
+    ISSUES,
     PULLS,
     REVIEW_COMMENTS,
     REVIEWS_WITH_COPILOT,
@@ -22,6 +23,7 @@ RESPONSES: dict[str, Any] = {
     "repos/o/r/pulls/42/comments?per_page=100": REVIEW_COMMENTS,
     "repos/o/r/pulls/43/reviews?per_page=100": [],
     "repos/o/r/dependabot/alerts?state=open&per_page=100": ALERTS,
+    "repos/o/r/issues?state=open&per_page=100": ISSUES,
 }
 
 
@@ -44,6 +46,9 @@ async def test_fetch_repo_full(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(state.pulls) == 2
     assert state.pulls[1].is_dependabot
     assert state.alerts == 2
+    assert state.issues is not None
+    assert [i.number for i in state.issues] == [7]  # PR #42 отфильтрован
+    assert state.issues[0].labels == ["bug", "ci"]
     assert state.updated_at is not None
     copilot = state.pulls[0].copilot_review
     assert copilot is not None
