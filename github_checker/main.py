@@ -44,8 +44,18 @@ def _run_snapshot(workspace: Path, local_only: bool, indent: int | None) -> None
     print(snapshot.model_dump_json(indent=indent))
 
 
+def _run_action(action: str, directory: Path) -> None:
+    """Run a headless whitelist action and print its JSON result."""
+    from github_checker.actions import open_pr, pull
+
+    result = pull(directory) if action == "pull" else open_pr(directory)
+    print(result.model_dump_json(indent=2))
+    if not result.ok:
+        raise SystemExit(1)
+
+
 def main() -> None:
-    """Parse args and dispatch: TUI (default) or headless snapshot."""
+    """Parse args and dispatch: TUI (default) or headless snapshot/actions."""
     parser = argparse.ArgumentParser(
         prog="github-checker",
         description="TUI monitor for multiple GitHub repositories.",
@@ -78,9 +88,17 @@ def main() -> None:
         default=2,
         help="JSON indent, 0 for compact (default: 2)",
     )
+    for name, help_text in (
+        ("pull", "fast-forward pull of one repo (headless twin of TUI key S)"),
+        ("open-pr", "create (or report) a PR for the repo's current branch"),
+    ):
+        act = sub.add_parser(name, help=help_text + "; prints a JSON result")
+        act.add_argument("dir", type=Path, help="path to the local clone")
     args = parser.parse_args()
     if args.command == "snapshot":
         _run_snapshot(args.workspace, args.local_only, args.indent or None)
+    elif args.command in ("pull", "open-pr"):
+        _run_action(args.command, args.dir)
     else:
         _run_tui(args.config)
 
