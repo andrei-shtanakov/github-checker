@@ -22,8 +22,23 @@ TUI-дашборд состояния нескольких GitHub-репозит
 git-статус каждого репо (ветка, ahead/behind, dirty) плюс, если `gh`
 авторизован, открытые PRы, issues, security alerts и rulesets. Без `gh`
 деградирует до git-only и пишет причину в поле `gh_error`; поле `host`
-помечает, чьи локальные клоны описаны. Потребитель — скилл `fleet-check`
-в `devtools/`.
+помечает, чьи локальные клоны описаны. Потребители — скилл `fleet-check`
+в `devtools/` и dispatcher (синк-коллектор).
+
+### Snapshot-контракт v1 (заморожен)
+
+Форма snapshot-JSON — версионируемый контракт: `contracts/snapshot/v1/`
+(`snapshot.schema.json` + golden-фикстуры full/degraded). Выход несёт поле
+`schema_version: 1`. Правила:
+
+- потребители **вендорят пиненую копию** схемы к себе и проверяют
+  `schema_version`;
+- обратимо-совместимые добавления (новые optional-поля) остаются v1, но
+  обязаны в том же PR осознанно обновить `snapshot.schema.json` — CI-тест
+  (`tests/test_snapshot_contract.py`) требует точного совпадения модели с
+  замороженным файлом, молчаливый drift невозможен;
+- breaking-изменение — только как `contracts/snapshot/v2/` рядом с v1,
+  никогда правкой v1.
 
 ## Клавиши
 

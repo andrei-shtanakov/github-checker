@@ -11,6 +11,7 @@ import re
 import socket
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -40,8 +41,14 @@ class RepoSnapshot(BaseModel):
 
 
 class WorkspaceSnapshot(BaseModel):
-    """Full fleet state; `host` marks whose clones the local data describes."""
+    """Full fleet state; `host` marks whose clones the local data describes.
 
+    The JSON shape is a frozen contract (`contracts/snapshot/v1/`): consumers
+    key off `schema_version`, and any breaking change to this model or its
+    parts must ship as v2 alongside v1 — never as an edit to v1.
+    """
+
+    schema_version: Literal[1] = 1
     workspace: Path
     host: str
     generated_at: datetime
@@ -80,7 +87,8 @@ async def build_snapshot(root: Path, include_github: bool = True) -> WorkspaceSn
     return WorkspaceSnapshot(
         workspace=root,
         host=socket.gethostname(),
-        generated_at=datetime.now(),
+        # tz-aware: contract schema declares format: date-time (strict RFC3339)
+        generated_at=datetime.now().astimezone(),
         gh_error=gh_error,
         repos=repos,
     )
