@@ -81,6 +81,14 @@ def remote_url(path: Path, name: str = "origin") -> str | None:
         return None
 
 
+def head_rev(path: Path) -> str | None:
+    """Commit hash of HEAD, or None if it cannot be resolved."""
+    try:
+        return _git(path, "rev-parse", "HEAD")
+    except LocalGitError:
+        return None
+
+
 def fetch(path: Path) -> None:
     """Run `git fetch --prune`; raises LocalGitError on failure."""
     _git(path, "fetch", "--prune")
