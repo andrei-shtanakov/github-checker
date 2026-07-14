@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from github_checker.localgit import (
     LocalGitError,
+    head_rev,
     is_git_repo,
     local_status,
     pull_ff_only,
@@ -35,13 +36,19 @@ class ActionResult(BaseModel):
 
 
 def _gh(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["gh", *args],
-        cwd=path,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    """Run gh; never raises — a missing binary or timeout becomes a failed result."""
+    try:
+        return subprocess.run(
+            ["gh", *args],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as err:
+        return subprocess.CompletedProcess(
+            ["gh", *args], returncode=127, stdout="", stderr=str(err)
+        )
 
 
 def pull(path: Path) -> ActionResult:
@@ -50,6 +57,7 @@ def pull(path: Path) -> ActionResult:
         return ActionResult(
             action="pull", dir=str(path), ok=False, error="not a git repository"
         )
+    before = head_rev(path)
     try:
         pull_ff_only(path)
     except LocalGitError as err:
@@ -60,11 +68,12 @@ def pull(path: Path) -> ActionResult:
             error=str(err),
             local=local_status(path),
         )
+    detail = "already up to date" if head_rev(path) == before else "fast-forwarded"
     return ActionResult(
         action="pull",
         dir=str(path),
         ok=True,
-        detail="fast-forwarded",
+        detail=detail,
         local=local_status(path),
     )
 
@@ -85,7 +94,14 @@ def open_pr(path: Path) -> ActionResult:
         try:
             data = json.loads(view.stdout)
         except json.JSONDecodeError:
-            data = {}
+            # успешный exit с мусором в stdout: создавать PR вслепую нельзя —
+            # риск дубля; честная ошибка вместо догадки
+            return ActionResult(
+                action="open-pr",
+                dir=str(path),
+                ok=False,
+                error="unexpected non-JSON output from `gh pr view`",
+            )
         if data.get("state") == "OPEN":
             return ActionResult(
                 action="open-pr",
@@ -105,6 +121,13 @@ def open_pr(path: Path) -> ActionResult:
             error=created.stderr.strip() or "gh pr create failed",
         )
     url = created.stdout.strip().splitlines()[-1] if created.stdout.strip() else None
+    if not url:
+        return ActionResult(
+            action="open-pr",
+            dir=str(path),
+            ok=False,
+            error="`gh pr create` succeeded but returned no PR URL",
+        )
     return ActionResult(
         action="open-pr",
         dir=str(path),
