@@ -2,7 +2,7 @@
   "schema_version": 1,
   "workspace": "/home/dev/workspace",
   "host": "machine-a",
-  "generated_at": "2026-07-14T12:00:00",
+  "generated_at": "2026-07-14T12:00:00Z",
   "gh_error": null,
   "repos": [
     {
@@ -51,7 +51,7 @@
         "alerts": 0,
         "rulesets": null,
         "error": null,
-        "updated_at": "2026-07-14T12:00:00",
+        "updated_at": "2026-07-14T12:00:00Z",
         "path": null,
         "local": null
       }

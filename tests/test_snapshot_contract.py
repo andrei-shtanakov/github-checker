@@ -18,8 +18,9 @@ CONTRACT = Path(__file__).parent.parent / "contracts" / "snapshot" / "v1"
 def test_model_matches_frozen_schema() -> None:
     frozen = json.loads((CONTRACT / "snapshot.schema.json").read_text())
     assert WorkspaceSnapshot.model_json_schema() == frozen, (
-        "WorkspaceSnapshot no longer matches contracts/snapshot/v1 — "
-        "a breaking change must become v2 (new directory), not an edit of v1"
+        "WorkspaceSnapshot diverged from contracts/snapshot/v1 — an additive "
+        "change must consciously update snapshot.schema.json in the same PR "
+        "(stays v1); a breaking change must become v2 (new directory)"
     )
 
 
@@ -28,7 +29,8 @@ def test_golden_fixture_roundtrips(name: str) -> None:
     raw = (CONTRACT / "fixtures" / name).read_text()
     snapshot = WorkspaceSnapshot.model_validate_json(raw)
     assert snapshot.schema_version == 1
-    # byte-level shape stability: parse → dump reproduces the fixture exactly
+    # structural round-trip: parse → dump reproduces the fixture's JSON value
+    # (key order/whitespace not asserted)
     assert json.loads(snapshot.model_dump_json()) == json.loads(raw)
 
 

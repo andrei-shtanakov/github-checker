@@ -87,7 +87,8 @@ async def build_snapshot(root: Path, include_github: bool = True) -> WorkspaceSn
     return WorkspaceSnapshot(
         workspace=root,
         host=socket.gethostname(),
-        generated_at=datetime.now(),
+        # tz-aware: contract schema declares format: date-time (strict RFC3339)
+        generated_at=datetime.now().astimezone(),
         gh_error=gh_error,
         repos=repos,
     )
