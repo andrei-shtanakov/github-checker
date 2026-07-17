@@ -15,7 +15,9 @@
 - Git operations in tests are ALWAYS real (temp bare origin + clone); only `gh` is faked via `monkeypatch.setattr(actions, "_gh", ...)`. Never stub git.
 - The operator's live working-tree **files** are never read as content source and never modified (spec §2 wording — shared `.git` metadata updates are expected and documented).
 - Invariants: PR-only; the pushed branch is always freshly created from `origin/<default>`; never force-push; never touch `open-pr`/`pull` behavior.
-- Every failure degrades to `ActionResult(ok=False, error=...)` — never an uncaught exception out of `propose_pr()`.
+- Every failure degrades to `ActionResult(ok=False, error=...)` — never an uncaught exception out of `propose_pr()` (including `OSError` from content-file reads / worktree writes — it is in the except tuple).
+- **Step 0, before Task 1:** `git switch -c feat/propose-pr` — direct commits to `master` are forbidden (umbrella policy). **After Task 5:** push the branch and open a PR (`gh pr create`); the plan does not end at a local commit.
+- `gh` is ALWAYS invoked as `actions._gh(...)` (module attribute), never via a from-import of `_gh` — a from-import binds the name at import time and silently breaks the `monkeypatch.setattr(actions, "_gh", ...)` convention every test relies on.
 
 ---
 
@@ -97,7 +99,15 @@ def test_parse_edits_duplicate_after_normalization(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "bad",
-    ["/abs.txt", "../up.txt", "a/../../up.txt", ".git/hooks/x", "a/.git/x", ""],
+    [
+        "/abs.txt",
+        "../up.txt",
+        "a/../b",  # normpath would collapse this to "b" — must reject RAW
+        "a/../../up.txt",
+        ".git/hooks/x",
+        "a/.git/x",
+        "",
+    ],
 )
 def test_normalize_repo_path_rejects_escapes(bad: str) -> None:
     with pytest.raises(ProposeError):
@@ -111,10 +121,14 @@ def test_normalize_repo_path_normalizes() -> None:
 def test_parse_if_match(tmp_path: Path) -> None:
     got = parse_if_match(["project.yaml=" + "a" * 64])
     assert got == {"project.yaml": "a" * 64}
+    # uppercase hex is normalized, not rejected
+    assert parse_if_match(["p.yaml=" + "A" * 64]) == {"p.yaml": "a" * 64}
     with pytest.raises(ProposeError, match="expected <repo-path>=<sha256>"):
         parse_if_match(["project.yaml"])
     with pytest.raises(ProposeError, match="not a sha256"):
         parse_if_match(["project.yaml=nothex"])
+    with pytest.raises(ProposeError, match="duplicate repo path"):
+        parse_if_match(["a/b=" + "a" * 64, "./a//b=" + "b" * 64])
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -158,16 +172,19 @@ class Edit:
 
 
 def normalize_repo_path(raw: str) -> str:
-    """Normalize a repo-relative POSIX path; reject anything that escapes."""
+    """Normalize a repo-relative POSIX path; reject anything that escapes.
+
+    `..`/`.git` are checked on the RAW parts, BEFORE normalization —
+    normpath would silently collapse `a/../b` into `b` and hide the escape.
+    """
     if not raw or raw.startswith("/") or "\\" in raw:
         raise ProposeError(f"invalid repo path: {raw!r}")
-    norm = posixpath.normpath(raw)
-    parts = norm.split("/")
-    if norm.startswith(("/", "../")) or ".." in parts or ".git" in parts:
+    raw_parts = [p for p in raw.split("/") if p not in ("", ".")]
+    if ".." in raw_parts or ".git" in raw_parts:
         raise ProposeError(f"repo path escapes the repository: {raw!r}")
-    if norm == ".":
+    if not raw_parts:
         raise ProposeError(f"invalid repo path: {raw!r}")
-    return norm
+    return posixpath.normpath(raw)
 
 
 def _split_first_equals(raw: str, what: str) -> tuple[str, str]:
@@ -199,16 +216,20 @@ def parse_if_match(raw: list[str]) -> dict[str, str]:
     guards: dict[str, str] = {}
     for item in raw:
         repo_raw, digest = _split_first_equals(item, "<repo-path>=<sha256>")
+        digest = digest.lower()
         if not _SHA256_RE.fullmatch(digest):
             raise ProposeError(f"not a sha256 hex digest: {digest!r}")
-        guards[normalize_repo_path(repo_raw)] = digest
+        repo_path = normalize_repo_path(repo_raw)
+        if repo_path in guards:
+            raise ProposeError(f"duplicate repo path: {repo_path}")
+        guards[repo_path] = digest
     return guards
 ```
 
 - [ ] **Step 4: Run the tests, format, lint, type-check**
 
 Run: `uv run pytest tests/test_propose.py -v && uv run ruff format . && uv run ruff check . && uv run pyrefly check`
-Expected: 7 passed; format/lint/pyrefly clean.
+Expected: all pass (the parametrized case expands, so the count is >7); format/lint/pyrefly clean.
 
 - [ ] **Step 5: Commit**
 
@@ -396,7 +417,6 @@ Run: `uv run pytest tests/test_actions.py -q` — Expected: all existing tests s
 Append to `tests/test_propose.py` (reuse `_make_pair` semantics — copy the builder locally to keep the file self-contained, matching `tests/test_actions.py`; and the `_FakeProc` pattern):
 
 ```python
-import json
 import subprocess
 
 from github_checker import actions
@@ -413,7 +433,7 @@ def _git(path: Path, *args: str) -> str:
     return r.stdout.strip()
 
 
-def _make_pair(tmp_path: Path) -> tuple[Path, Path]:
+def _make_pair(tmp_path: Path) -> tuple[Path, Path, Path]:
     origin = tmp_path / "origin.git"
     origin.mkdir()
     _git(origin, "init", "-q", "--bare", "-b", "main")
@@ -435,7 +455,7 @@ def _make_pair(tmp_path: Path) -> tuple[Path, Path]:
     )
     _git(clone, "config", "user.email", "t@example.com")
     _git(clone, "config", "user.name", "t")
-    return origin, clone
+    return origin, seed, clone
 
 
 class _FakeProc:
@@ -456,7 +476,7 @@ def _gh_ok(monkeypatch) -> None:
 def test_happy_path_lands_branch_in_origin_live_tree_untouched(
     tmp_path: Path, monkeypatch
 ) -> None:
-    origin, clone = _make_pair(tmp_path)
+    origin, _, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
     live_before = (clone / "project.yaml").read_bytes()
     content = tmp_path / "new.yaml"
@@ -485,7 +505,7 @@ def test_happy_path_lands_branch_in_origin_live_tree_untouched(
 def test_dirty_live_checkout_same_file_still_bases_on_default(
     tmp_path: Path, monkeypatch
 ) -> None:
-    origin, clone = _make_pair(tmp_path)
+    origin, _, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
     (clone / "project.yaml").write_text("OPERATOR LOCAL WIP\n")
     content = tmp_path / "new.yaml"
@@ -502,7 +522,7 @@ def test_dirty_live_checkout_same_file_still_bases_on_default(
 
 
 def test_multiple_edits_one_commit(tmp_path: Path, monkeypatch) -> None:
-    origin, clone = _make_pair(tmp_path)
+    origin, _, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
     a = tmp_path / "a.txt"
     a.write_text("A\n")
@@ -522,7 +542,7 @@ def test_multiple_edits_one_commit(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_noop_returns_structural_marker(tmp_path: Path, monkeypatch) -> None:
-    _, clone = _make_pair(tmp_path)
+    _, _, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
     same = tmp_path / "same.yaml"
     same.write_text("spec_runner:\n  max_retries: 3\n")  # identical to origin/main
@@ -541,7 +561,7 @@ def test_noop_returns_structural_marker(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_parse_error_degrades_to_result(tmp_path: Path) -> None:
-    _, clone = _make_pair(tmp_path)
+    _, _, clone = _make_pair(tmp_path)
     result = propose_pr(clone, message="x", edit_args=["no-separator"])
     assert not result.ok
     assert "expected" in (result.error or "")
@@ -559,7 +579,9 @@ Expected: FAIL — `ImportError: cannot import name 'propose_pr'`.
 
 - [ ] **Step 4: Implement `propose_pr()` in `propose.py`**
 
-Add imports at the top: `import hashlib`, `import secrets`, `import shutil`, `import subprocess`, `import tempfile`, `from datetime import UTC, datetime`, `from github_checker.actions import ActionResult, _gh`, `from github_checker.localgit import LocalGitError, _git, blob_bytes, default_branch, fetch, is_git_repo, set_head_auto`.
+Add imports at the top: `import hashlib`, `import json`, `import secrets`, `import shutil`, `import subprocess`, `import tempfile`, `from datetime import UTC, datetime`, `from github_checker import actions`, `from github_checker.actions import ActionResult`, `from github_checker.localgit import LocalGitError, _git, blob_bytes, default_branch, fetch, is_git_repo, set_head_auto`.
+
+**CRITICAL — do NOT from-import `_gh`.** `from github_checker.actions import _gh` binds the name in `propose`'s namespace at import time; the test convention `monkeypatch.setattr(actions, "_gh", ...)` replaces the attribute on the `actions` module, so a from-imported `propose._gh` would keep pointing at the real function and every Task 3-4 test would invoke the real `gh` binary (127 in CI; real PR creation on a dev machine). Always call `actions._gh(...)`.
 
 ```python
 def _fail(error: str, *, detail: str | None = None, **extra: object) -> ActionResult:
@@ -658,7 +680,7 @@ def propose_pr(
         commit_sha = _git(worktree, "rev-parse", "HEAD")
         _git(worktree, "push", "-u", "origin", head)
         pushed = True
-        created = _gh(worktree, "pr", "create", "--fill")
+        created = actions._gh(worktree, "pr", "create", "--fill")
         if created.returncode != 0:
             return _cleanup_remote_after_gh_failure(
                 path,
@@ -692,7 +714,10 @@ def propose_pr(
             commit_sha=commit_sha,
             changed_paths=changed,
         )
-    except (ProposeError, LocalGitError) as err:
+    except (ProposeError, LocalGitError, OSError) as err:
+        # OSError included: content_file may vanish between parse and apply
+        # (TOCTOU), worktree writes may hit permissions — the global
+        # constraint promises degradation to a result, not a traceback.
         extra: dict[str, object] = {"dir": result_dir, "base_branch": base}
         if pushed:
             extra.update(_best_effort_delete_remote(path, head))
@@ -713,12 +738,10 @@ def propose_pr(
 
 def _default_branch_fallback(path: Path) -> str | None:
     """`gh repo view` as the last network fallback (spec §3 step 3)."""
-    proc = _gh(path, "repo", "view", "--json", "defaultBranchRef")
+    proc = actions._gh(path, "repo", "view", "--json", "defaultBranchRef")
     if proc.returncode != 0:
         return None
     try:
-        import json
-
         name = json.loads(proc.stdout)["defaultBranchRef"]["name"]
     except (ValueError, KeyError, TypeError):
         return None
@@ -726,9 +749,14 @@ def _default_branch_fallback(path: Path) -> str | None:
 
 
 def _validate_branch(path: Path, head: str, base: str) -> None:
-    """check-ref-format + refuse default/existing local/remote (spec §1)."""
+    """check-ref-format + refuse default/existing local/remote (spec §1).
+
+    `-C <path>` matters: `--branch` expands `@{-N}` syntax and some git
+    versions refuse it outside a repository — validate in the target repo.
+    """
     check = subprocess.run(
-        ["git", "check-ref-format", "--branch", head], capture_output=True
+        ["git", "-C", str(path), "check-ref-format", "--branch", head],
+        capture_output=True,
     )
     if check.returncode != 0:
         raise ProposeError(f"invalid branch name: {head!r}")
@@ -794,7 +822,7 @@ import hashlib
 
 
 def test_if_match_mismatch_no_branch_no_pr(tmp_path: Path, monkeypatch) -> None:
-    origin, clone = _make_pair(tmp_path)
+    origin, _, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
     content = tmp_path / "new.yaml"
     content.write_text("changed\n")
@@ -813,7 +841,7 @@ def test_if_match_mismatch_no_branch_no_pr(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_if_match_pass_with_raw_bytes(tmp_path: Path, monkeypatch) -> None:
-    origin, clone = _make_pair(tmp_path)
+    _, _, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
     base_bytes = (clone / "project.yaml").read_bytes()
     content = tmp_path / "new.yaml"
@@ -831,7 +859,7 @@ def test_if_match_pass_with_raw_bytes(tmp_path: Path, monkeypatch) -> None:
 def test_custom_branch_existing_local_and_remote_refused(
     tmp_path: Path, monkeypatch
 ) -> None:
-    origin, clone = _make_pair(tmp_path)
+    _, _, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
     content = tmp_path / "c.txt"
     content.write_text("x\n")
@@ -850,12 +878,11 @@ def test_custom_branch_existing_local_and_remote_refused(
 def test_symlink_escape_refused_nothing_written_outside(
     tmp_path: Path, monkeypatch
 ) -> None:
-    origin, clone = _make_pair(tmp_path)
+    _, seed, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
     outside = tmp_path / "outside"
     outside.mkdir()
     # a symlink dir committed on the default branch
-    seed = tmp_path / "seed"
     (seed / "link").symlink_to(outside, target_is_directory=True)
     _git(seed, "add", "link")
     _git(seed, "commit", "-q", "-m", "add symlink")
@@ -875,7 +902,7 @@ def test_symlink_escape_refused_nothing_written_outside(
 def test_gh_failure_after_push_deletes_remote_branch(
     tmp_path: Path, monkeypatch
 ) -> None:
-    origin, clone = _make_pair(tmp_path)
+    origin, _, clone = _make_pair(tmp_path)
     monkeypatch.setattr(
         actions, "_gh", lambda path, *args: _FakeProc(1, stderr="gh exploded")
     )
@@ -895,9 +922,8 @@ def test_gh_failure_after_push_deletes_remote_branch(
 def test_stale_origin_head_resolves_new_default(
     tmp_path: Path, monkeypatch
 ) -> None:
-    origin, clone = _make_pair(tmp_path)
+    origin, seed, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
-    seed = tmp_path / "seed"
     _git(seed, "switch", "-q", "-c", "new-main")
     _git(seed, "push", "-q", "-u", "origin", "new-main")
     _git(origin, "symbolic-ref", "HEAD", "refs/heads/new-main")
@@ -942,7 +968,7 @@ git commit -m "test: pin propose-pr guards — if-match, branch refusal, symlink
 
 - [ ] **Step 1: Write the failing CLI test**
 
-Read `tests/test_main.py` first to match how it invokes `main()` (argv monkeypatch/capsys). Add a test that runs `propose-pr` against a `_make_pair` clone with a monkeypatched `actions._gh` returning a PR URL, asserts exit code 0, and that stdout parses as JSON with `action == "propose-pr"`, `ok is True`, `pr_url`, `branch`, `base_branch`, `commit_sha`, `changed_paths`. Add a second test: missing `--edit` → exit 1, `ok is False` in the JSON. Follow the file's existing style exactly — do not invent a new harness.
+Read `tests/test_main.py` first to match how it invokes `main()` (argv monkeypatch/capsys). Add a test that runs `propose-pr` against a `_make_pair` clone with a monkeypatched `actions._gh` returning a PR URL, asserts exit code 0, and that stdout parses as JSON with `action == "propose-pr"`, `ok is True`, `pr_url`, `branch`, `base_branch`, `commit_sha`, `changed_paths`. Add a second test: no `--edit` flag at all → exit code 1 AND stdout still parses as JSON with `ok is False` and `"at least one --edit"` in the error (this works because `--edit` is deliberately NOT `required=True` — see Step 3's comment; argparse `required` would exit(2) with a non-JSON usage message and break the headless contract). Follow the file's existing style exactly — do not invent a new harness.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -985,10 +1011,14 @@ In `main()`, after the existing pull/open-pr loop:
     prop.add_argument(
         "--edit",
         action="append",
-        required=True,
+        default=[],
         metavar="REPO_PATH=CONTENT_FILE",
         help="file to create/replace (repeatable)",
     )
+    # NOT required=True: argparse would exit(2) with a usage message on
+    # stderr, breaking the headless JSON contract. propose_pr() itself
+    # returns ActionResult(ok=False, error="at least one --edit is
+    # required") -> JSON on stdout + exit 1, like every other failure.
     prop.add_argument(
         "--if-match",
         action="append",
@@ -997,7 +1027,11 @@ In `main()`, after the existing pull/open-pr loop:
         metavar="REPO_PATH=SHA256",
         help="stale-base guard: sha256 of the base content the caller saw",
     )
-    prop.add_argument("--branch", default=None, help="head branch name (generated if omitted)")
+    prop.add_argument(
+        "--branch",
+        default=None,
+        help="head branch name (generated if omitted)",
+    )
 ```
 
 And in the dispatch chain: `elif args.command == "propose-pr": _run_propose(args)`.
