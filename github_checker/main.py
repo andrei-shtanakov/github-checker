@@ -54,6 +54,22 @@ def _run_action(action: str, directory: Path) -> None:
         raise SystemExit(1)
 
 
+def _run_propose(args: argparse.Namespace) -> None:
+    """Run propose-pr and print its JSON result (exit 1 on failure)."""
+    from github_checker.propose import propose_pr
+
+    result = propose_pr(
+        args.dir,
+        message=args.message,
+        edit_args=args.edit,
+        if_match_args=args.if_match,
+        branch=args.branch,
+    )
+    print(result.model_dump_json(indent=2))
+    if not result.ok:
+        raise SystemExit(1)
+
+
 def main() -> None:
     """Parse args and dispatch: TUI (default) or headless snapshot/actions."""
     parser = argparse.ArgumentParser(
@@ -94,11 +110,46 @@ def main() -> None:
     ):
         act = sub.add_parser(name, help=help_text + "; prints a JSON result")
         act.add_argument("dir", type=Path, help="path to the local clone")
+    prop = sub.add_parser(
+        "propose-pr",
+        help=(
+            "apply explicit file content in a temp worktree off the default "
+            "branch, push a fresh branch, open a PR; prints a JSON result"
+        ),
+    )
+    prop.add_argument("dir", type=Path, help="path to the local clone")
+    prop.add_argument("--message", required=True, help="commit message (PR title)")
+    prop.add_argument(
+        "--edit",
+        action="append",
+        default=[],
+        metavar="REPO_PATH=CONTENT_FILE",
+        help="file to create/replace (repeatable)",
+    )
+    # NOT required=True: argparse would exit(2) with a usage message on
+    # stderr, breaking the headless JSON contract. propose_pr() itself
+    # returns ActionResult(ok=False, error="at least one --edit is
+    # required") -> JSON on stdout + exit 1, like every other failure.
+    prop.add_argument(
+        "--if-match",
+        action="append",
+        default=[],
+        dest="if_match",
+        metavar="REPO_PATH=SHA256",
+        help="stale-base guard: sha256 of the base content the caller saw",
+    )
+    prop.add_argument(
+        "--branch",
+        default=None,
+        help="head branch name (generated if omitted)",
+    )
     args = parser.parse_args()
     if args.command == "snapshot":
         _run_snapshot(args.workspace, args.local_only, args.indent or None)
     elif args.command in ("pull", "open-pr"):
         _run_action(args.command, args.dir)
+    elif args.command == "propose-pr":
+        _run_propose(args)
     else:
         _run_tui(args.config)
 
