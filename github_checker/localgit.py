@@ -97,3 +97,43 @@ def fetch(path: Path) -> None:
 def pull_ff_only(path: Path) -> None:
     """Run `git pull --ff-only`; raises LocalGitError on divergence/failure."""
     _git(path, "pull", "--ff-only")
+
+
+def set_head_auto(path: Path) -> None:
+    """Best-effort `git remote set-head origin -a`; never raises.
+
+    origin/HEAD can be stale when the remote's default branch changed
+    after clone — a plain fetch does not update it.
+    """
+    try:
+        _git(path, "remote", "set-head", "origin", "-a")
+    except LocalGitError:
+        pass
+
+
+def default_branch(path: Path) -> str | None:
+    """Default branch per refs/remotes/origin/HEAD, or None if unset."""
+    try:
+        ref = _git(path, "symbolic-ref", "refs/remotes/origin/HEAD")
+    except LocalGitError:
+        return None
+    prefix = "refs/remotes/origin/"
+    return ref.removeprefix(prefix) if ref.startswith(prefix) else None
+
+
+def blob_bytes(path: Path, ref: str, repo_path: str) -> bytes | None:
+    """Raw bytes of `<ref>:<repo_path>` (no smudge filters); None if absent."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "cat-file", "blob", f"{ref}:{repo_path}"],
+            capture_output=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as err:
+        raise LocalGitError(str(err)) from err
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace").strip()
+        if "does not exist in" in stderr or "exists on disk, but not in" in stderr:
+            return None
+        raise LocalGitError(stderr or "git cat-file failed")
+    return result.stdout

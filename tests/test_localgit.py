@@ -1,4 +1,5 @@
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -147,3 +148,90 @@ def test_pull_ff_only_divergence_raises(tmp_path: Path) -> None:
     fetch(repo)
     with pytest.raises(LocalGitError):
         pull_ff_only(repo)
+
+
+def _pair(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, Callable[..., None]]:
+    """Build origin (bare), seed (local), clone (remote clone), and git runner."""
+
+    def g(path: Path, *args: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(path), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    g(origin, "init", "-q", "--bare", "-b", "main")
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    g(seed, "init", "-q", "-b", "main")
+    g(seed, "config", "user.email", "t@example.com")
+    g(seed, "config", "user.name", "t")
+    (seed / "f.txt").write_bytes(b"one\r\n")  # CRLF on purpose (raw-bytes test)
+    g(seed, "add", "f.txt")
+    g(seed, "commit", "-q", "-m", "init")
+    g(seed, "remote", "add", "origin", str(origin))
+    g(seed, "push", "-q", "-u", "origin", "main")
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", str(origin), str(clone)],
+        check=True,
+        capture_output=True,
+    )
+    return origin, seed, clone, g
+
+
+def test_default_branch_from_fresh_clone(tmp_path: Path) -> None:
+    from github_checker.localgit import default_branch
+
+    _, _, clone, _ = _pair(tmp_path)
+    assert default_branch(clone) == "main"
+
+
+def test_default_branch_none_when_head_unset(tmp_path: Path) -> None:
+    from github_checker.localgit import default_branch
+
+    _, _, clone, g = _pair(tmp_path)
+    g(clone, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    assert default_branch(clone) is None
+
+
+def test_set_head_auto_refreshes_stale_head(tmp_path: Path) -> None:
+    from github_checker.localgit import default_branch, set_head_auto
+
+    origin, seed, clone, g = _pair(tmp_path)
+    # remote's default branch changes to new-main AFTER the clone
+    g(seed, "switch", "-q", "-c", "new-main")
+    g(seed, "push", "-q", "-u", "origin", "new-main")
+    g(origin, "symbolic-ref", "HEAD", "refs/heads/new-main")
+    assert default_branch(clone) == "main"  # stale
+    fetch(clone)
+    set_head_auto(clone)
+    assert default_branch(clone) == "new-main"  # refreshed
+
+
+def test_blob_bytes_raw_and_absent(tmp_path: Path) -> None:
+    from github_checker.localgit import blob_bytes
+
+    _, _, clone, _ = _pair(tmp_path)
+    assert blob_bytes(clone, "origin/main", "f.txt") == b"one\r\n"  # raw CRLF
+    assert blob_bytes(clone, "origin/main", "missing.txt") is None
+
+
+def test_blob_bytes_invalid_ref_raises(tmp_path: Path) -> None:
+    from github_checker.localgit import LocalGitError, blob_bytes
+
+    _, _, clone, _ = _pair(tmp_path)
+    with pytest.raises(LocalGitError):
+        blob_bytes(clone, "no-such-ref-xyz", "f.txt")
+
+
+def test_blob_bytes_broken_repo_raises(tmp_path: Path) -> None:
+    from github_checker.localgit import LocalGitError, blob_bytes
+
+    with pytest.raises(LocalGitError):
+        blob_bytes(tmp_path / "not-a-repo", "origin/main", "f.txt")

@@ -33,6 +33,10 @@ class ActionResult(BaseModel):
     pr_url: str | None = None
     pr_state: str | None = None
     local: LocalStatus | None = None
+    branch: str | None = None
+    base_branch: str | None = None
+    commit_sha: str | None = None
+    changed_paths: list[str] | None = None
 
 
 def _gh(path: Path, *args: str) -> subprocess.CompletedProcess[str]:

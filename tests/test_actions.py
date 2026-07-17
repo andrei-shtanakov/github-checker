@@ -96,9 +96,7 @@ class _FakeProc:
 def test_open_pr_reports_existing(tmp_path: Path, monkeypatch) -> None:
     _, clone = _make_pair(tmp_path)
     view = json.dumps({"url": "https://github.com/o/r/pull/5", "state": "OPEN"})
-    monkeypatch.setattr(
-        actions, "_gh", lambda path, *args: _FakeProc(0, stdout=view)
-    )
+    monkeypatch.setattr(actions, "_gh", lambda path, *args: _FakeProc(0, stdout=view))
     result = open_pr(clone)
     assert result.ok
     assert result.detail == "pull request already open"
@@ -153,9 +151,7 @@ def test_open_pr_create_without_url_fails(tmp_path: Path, monkeypatch) -> None:
     assert "no PR URL" in (result.error or "")
 
 
-def test_gh_missing_binary_becomes_failed_result(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_gh_missing_binary_becomes_failed_result(tmp_path: Path, monkeypatch) -> None:
     def raise_missing(*args, **kwargs):
         raise FileNotFoundError("No such file or directory: 'gh'")
 
