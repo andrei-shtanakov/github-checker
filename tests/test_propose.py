@@ -293,12 +293,16 @@ def test_custom_branch_existing_local_and_remote_refused(
     _git(clone, "push", "-q", "origin", "main:taken-remote")
     _git(clone, "fetch", "-q")
 
-    for bad in ("taken-local", "taken-remote", "main"):
+    for bad, expected_prefix in (
+        ("taken-local", "branch already exists:"),
+        ("taken-remote", "branch already exists:"),
+        ("main", "refusing to target the default branch"),
+    ):
         result = propose_pr(
             clone, message="x", edit_args=[f"n.txt={content}"], branch=bad
         )
         assert not result.ok, bad
-        assert "exist" in (result.error or "") or "default" in (result.error or "")
+        assert (result.error or "").startswith(expected_prefix), (bad, result.error)
 
 
 def test_symlink_escape_refused_nothing_written_outside(
@@ -356,3 +360,63 @@ def test_stale_origin_head_resolves_new_default(tmp_path: Path, monkeypatch) -> 
 
     assert result.ok, result.error
     assert result.base_branch == "new-main"
+
+
+def test_default_branch_fallback_via_remote_show(tmp_path: Path) -> None:
+    from github_checker.propose import _default_branch_fallback
+
+    _, _, clone = _make_pair(tmp_path)
+    # no gh involvement needed: `git remote show origin` reports HEAD branch
+    assert _default_branch_fallback(clone) == "main"
+
+
+def test_default_branch_fallback_via_gh_when_remote_show_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from github_checker.propose import _default_branch_fallback
+
+    _, _, clone = _make_pair(tmp_path)
+    _git(clone, "remote", "set-url", "origin", str(tmp_path / "gone"))
+    monkeypatch.setattr(
+        actions,
+        "_gh",
+        lambda path, *args: _FakeProc(0, stdout='{"defaultBranchRef":{"name":"main"}}'),
+    )
+    assert _default_branch_fallback(clone) == "main"
+
+
+def test_origin_head_absent_e2e_still_resolves(tmp_path: Path, monkeypatch) -> None:
+    """Spec §8 case 9: origin/HEAD deleted -> resolution chain still finds main."""
+    origin, _, clone = _make_pair(tmp_path)
+    _gh_ok(monkeypatch)
+    _git(clone, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    content = tmp_path / "c.txt"
+    content.write_text("x\n")
+
+    result = propose_pr(clone, message="x", edit_args=[f"n.txt={content}"])
+
+    assert result.ok, result.error
+    assert result.base_branch == "main"
+
+
+def test_gh_failure_and_delete_failure_surfaces_branch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _, _, clone = _make_pair(tmp_path)
+
+    def sabotage_gh(path: Path, *args: str) -> _FakeProc:
+        # break the remote AFTER the successful push, so the best-effort
+        # `push --delete` cleanup fails too
+        _git(clone, "remote", "set-url", "origin", str(tmp_path / "gone"))
+        return _FakeProc(1, stderr="gh exploded")
+
+    monkeypatch.setattr(actions, "_gh", sabotage_gh)
+    content = tmp_path / "c.txt"
+    content.write_text("x\n")
+
+    result = propose_pr(clone, message="x", edit_args=[f"n.txt={content}"])
+
+    assert not result.ok
+    assert "gh exploded" in (result.error or "")
+    assert result.branch is not None
+    assert result.branch.startswith("propose/")
