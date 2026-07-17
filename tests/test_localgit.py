@@ -220,3 +220,18 @@ def test_blob_bytes_raw_and_absent(tmp_path: Path) -> None:
     _, _, clone, _ = _pair(tmp_path)
     assert blob_bytes(clone, "origin/main", "f.txt") == b"one\r\n"  # raw CRLF
     assert blob_bytes(clone, "origin/main", "missing.txt") is None
+
+
+def test_blob_bytes_invalid_ref_raises(tmp_path: Path) -> None:
+    from github_checker.localgit import LocalGitError, blob_bytes
+
+    _, _, clone, _ = _pair(tmp_path)
+    with pytest.raises(LocalGitError):
+        blob_bytes(clone, "no-such-ref-xyz", "f.txt")
+
+
+def test_blob_bytes_broken_repo_raises(tmp_path: Path) -> None:
+    from github_checker.localgit import LocalGitError, blob_bytes
+
+    with pytest.raises(LocalGitError):
+        blob_bytes(tmp_path / "not-a-repo", "origin/main", "f.txt")

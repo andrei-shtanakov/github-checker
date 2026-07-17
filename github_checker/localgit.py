@@ -132,5 +132,8 @@ def blob_bytes(path: Path, ref: str, repo_path: str) -> bytes | None:
     except (subprocess.TimeoutExpired, FileNotFoundError) as err:
         raise LocalGitError(str(err)) from err
     if result.returncode != 0:
-        return None
+        stderr = result.stderr.decode(errors="replace").strip()
+        if "does not exist in" in stderr or "exists on disk, but not in" in stderr:
+            return None
+        raise LocalGitError(stderr or "git cat-file failed")
     return result.stdout
