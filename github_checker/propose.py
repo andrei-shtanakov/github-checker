@@ -341,12 +341,17 @@ def _validate_branch(path: Path, head: str, base: str) -> None:
 
 
 def _best_effort_delete_remote(path: Path, head: str) -> dict[str, object]:
-    """Delete the pushed branch; on failure surface it via `branch` (spec §5)."""
-    deleted = subprocess.run(
-        ["git", "-C", str(path), "push", "origin", "--delete", head],
-        capture_output=True,
-    )
-    return {} if deleted.returncode == 0 else {"branch": head}
+    """Delete the pushed branch; on failure surface it via `branch` (spec §5).
+
+    Goes through `_git` (30s timeout) — this is a networked push and a raw
+    subprocess.run could hang forever on a credential prompt or a stalled
+    transport. Any failure, including timeout, is a failed cleanup.
+    """
+    try:
+        _git(path, "push", "origin", "--delete", head)
+    except LocalGitError:
+        return {"branch": head}
+    return {}
 
 
 def _cleanup_remote_after_gh_failure(
