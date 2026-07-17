@@ -87,7 +87,7 @@ fetch --prune
 → write each --edit's content at its repo-path (validated per §1)
 → git add <exactly those paths>
 → no-op guard: empty diff vs origin/<default> → ok=False,
-  error="no changes vs <default>"          (§4 for semantics)
+  detail="no-op"                           (§4 for semantics)
 → git commit -m <message>
 → git push -u origin <branch>
 → gh pr create --fill   (run inside the worktree)
