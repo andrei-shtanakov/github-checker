@@ -1,5 +1,6 @@
 """propose-pr: scoped content-PR from an isolated worktree (spec 2026-07-17)."""
 
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -239,3 +240,119 @@ def test_parse_error_degrades_to_result(tmp_path: Path) -> None:
 def test_not_a_repo(tmp_path: Path) -> None:
     result = propose_pr(tmp_path, message="x", edit_args=[])
     assert not result.ok
+
+
+def test_if_match_mismatch_no_branch_no_pr(tmp_path: Path, monkeypatch) -> None:
+    origin, _, clone = _make_pair(tmp_path)
+    _gh_ok(monkeypatch)
+    content = tmp_path / "new.yaml"
+    content.write_text("changed\n")
+    stale_hash = hashlib.sha256(b"not what is on main").hexdigest()
+
+    result = propose_pr(
+        clone,
+        message="stale",
+        edit_args=[f"project.yaml={content}"],
+        if_match_args=[f"project.yaml={stale_hash}"],
+    )
+
+    assert not result.ok
+    assert "base file changed" in (result.error or "")
+    assert _git(origin, "branch", "--list", "propose/*") == ""
+
+
+def test_if_match_pass_with_raw_bytes(tmp_path: Path, monkeypatch) -> None:
+    from github_checker.localgit import blob_bytes
+
+    _, _, clone = _make_pair(tmp_path)
+    _gh_ok(monkeypatch)
+    # hash the RAW BLOB at origin/<default> — the contract's comparison
+    # source — not the working-tree file (which smudge filters could skew)
+    base_blob = blob_bytes(clone, "origin/main", "project.yaml")
+    assert base_blob is not None
+    content = tmp_path / "new.yaml"
+    content.write_text("spec_runner:\n  max_retries: 9\n")
+
+    result = propose_pr(
+        clone,
+        message="ok",
+        edit_args=[f"project.yaml={content}"],
+        if_match_args=[f"project.yaml={hashlib.sha256(base_blob).hexdigest()}"],
+    )
+    assert result.ok, result.error
+
+
+def test_custom_branch_existing_local_and_remote_refused(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _, _, clone = _make_pair(tmp_path)
+    _gh_ok(monkeypatch)
+    content = tmp_path / "c.txt"
+    content.write_text("x\n")
+    _git(clone, "branch", "taken-local")
+    _git(clone, "push", "-q", "origin", "main:taken-remote")
+    _git(clone, "fetch", "-q")
+
+    for bad in ("taken-local", "taken-remote", "main"):
+        result = propose_pr(
+            clone, message="x", edit_args=[f"n.txt={content}"], branch=bad
+        )
+        assert not result.ok, bad
+        assert "exist" in (result.error or "") or "default" in (result.error or "")
+
+
+def test_symlink_escape_refused_nothing_written_outside(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _, seed, clone = _make_pair(tmp_path)
+    _gh_ok(monkeypatch)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    # a symlink dir committed on the default branch
+    (seed / "link").symlink_to(outside, target_is_directory=True)
+    _git(seed, "add", "link")
+    _git(seed, "commit", "-q", "-m", "add symlink")
+    _git(seed, "push", "-q")
+    content = tmp_path / "c.txt"
+    content.write_text("escaped\n")
+
+    result = propose_pr(clone, message="x", edit_args=[f"link/evil.txt={content}"])
+
+    assert not result.ok
+    assert "symlink" in (result.error or "")
+    assert list(outside.iterdir()) == []  # nothing escaped
+
+
+def test_gh_failure_after_push_deletes_remote_branch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    origin, _, clone = _make_pair(tmp_path)
+    monkeypatch.setattr(
+        actions, "_gh", lambda path, *args: _FakeProc(1, stderr="gh exploded")
+    )
+    content = tmp_path / "c.txt"
+    content.write_text("x\n")
+
+    result = propose_pr(clone, message="x", edit_args=[f"n.txt={content}"])
+
+    assert not result.ok
+    assert "gh exploded" in (result.error or "")
+    # the orphaned remote branch was cleaned up best-effort
+    assert _git(origin, "branch", "--list", "propose/*") == ""
+    # and since cleanup succeeded, branch is not surfaced
+    assert result.branch is None
+
+
+def test_stale_origin_head_resolves_new_default(tmp_path: Path, monkeypatch) -> None:
+    origin, seed, clone = _make_pair(tmp_path)
+    _gh_ok(monkeypatch)
+    _git(seed, "switch", "-q", "-c", "new-main")
+    _git(seed, "push", "-q", "-u", "origin", "new-main")
+    _git(origin, "symbolic-ref", "HEAD", "refs/heads/new-main")
+    content = tmp_path / "c.txt"
+    content.write_text("x\n")
+
+    result = propose_pr(clone, message="x", edit_args=[f"n.txt={content}"])
+
+    assert result.ok, result.error
+    assert result.base_branch == "new-main"
