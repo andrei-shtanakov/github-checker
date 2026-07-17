@@ -72,6 +72,8 @@ def test_parse_edits_duplicate_after_normalization(tmp_path: Path) -> None:
         "a/../../up.txt",
         ".git/hooks/x",
         "a/.git/x",
+        ".GIT/config",
+        "a/.Git/x",
         "",
     ],
 )
@@ -153,6 +155,7 @@ def test_happy_path_lands_branch_in_origin_live_tree_untouched(
     origin, _, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
     live_before = (clone / "project.yaml").read_bytes()
+    main_sha_before = _git(origin, "rev-parse", "main")
     content = tmp_path / "new.yaml"
     content.write_text("spec_runner:\n  max_retries: 9\n")
 
@@ -173,6 +176,8 @@ def test_happy_path_lands_branch_in_origin_live_tree_untouched(
     assert (clone / "project.yaml").read_bytes() == live_before
     # temp worktree and local branch are cleaned up
     assert "propose/" not in _git(clone, "branch", "--list", "propose/*")
+    # the default branch itself was never pushed/moved (belt-and-suspenders)
+    assert _git(origin, "rev-parse", "main") == main_sha_before
     assert result.branch not in _git(clone, "worktree", "list")
 
 
@@ -420,3 +425,19 @@ def test_gh_failure_and_delete_failure_surfaces_branch(
     assert "gh exploded" in (result.error or "")
     assert result.branch is not None
     assert result.branch.startswith("propose/")
+
+
+def test_mkdtemp_failure_degrades_to_result(tmp_path: Path, monkeypatch) -> None:
+    import tempfile as _tempfile
+
+    _, _, clone = _make_pair(tmp_path)
+
+    def boom(*args: object, **kwargs: object) -> str:
+        raise OSError("temp fs full")
+
+    monkeypatch.setattr(_tempfile, "mkdtemp", boom)
+    content = tmp_path / "c.txt"
+    content.write_text("x\n")
+    result = propose_pr(clone, message="x", edit_args=[f"n.txt={content}"])
+    assert not result.ok
+    assert "temp" in (result.error or "").lower()

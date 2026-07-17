@@ -57,7 +57,7 @@ def normalize_repo_path(raw: str) -> str:
     if not raw or raw.startswith("/") or "\\" in raw:
         raise ProposeError(f"invalid repo path: {raw!r}")
     raw_parts = [p for p in raw.split("/") if p not in ("", ".")]
-    if ".." in raw_parts or ".git" in raw_parts:
+    if ".." in raw_parts or any(p.lower() == ".git" for p in raw_parts):
         raise ProposeError(f"repo path escapes the repository: {raw!r}")
     if not raw_parts:
         raise ProposeError(f"invalid repo path: {raw!r}")
@@ -186,7 +186,12 @@ def propose_pr(
             update={"dir": result_dir, "base_branch": base}
         )
 
-    tmp = Path(tempfile.mkdtemp(prefix="propose-pr-"))
+    try:
+        tmp = Path(tempfile.mkdtemp(prefix="propose-pr-"))
+    except OSError as err:
+        return _fail(f"cannot create temp dir: {err}").model_copy(
+            update={"dir": result_dir, "base_branch": base}
+        )
     worktree = tmp / "wt"
     worktree_created = False
     pushed = False
