@@ -91,6 +91,20 @@ def test_parse_edits_rejects_unreadable_or_irregular_content(tmp_path: Path) -> 
         parse_edits([f"a.txt={d}"])
 
 
+def test_parse_edits_rejects_unreadable_permissions(tmp_path: Path) -> None:
+    import os
+
+    f = _content(tmp_path)
+    f.chmod(0)
+    try:
+        if os.access(f, os.R_OK):  # e.g. running as root — cannot exercise this
+            pytest.skip("filesystem grants read despite chmod 0")
+        with pytest.raises(ProposeError, match="not a readable regular file"):
+            parse_edits([f"a.txt={f}"])
+    finally:
+        f.chmod(0o600)
+
+
 def test_parse_edits_duplicate_after_normalization(tmp_path: Path) -> None:
     f = _content(tmp_path)
     with pytest.raises(ProposeError, match="duplicate repo path"):
@@ -207,6 +221,13 @@ def parse_edits(raw: list[str]) -> list[Edit]:
         content_file = Path(file_raw)
         if not content_file.is_file():
             raise ProposeError(f"not a readable regular file: {content_file}")
+        try:
+            with content_file.open("rb"):
+                pass  # readability, not just existence, is checked at parse time
+        except OSError as err:
+            raise ProposeError(
+                f"not a readable regular file: {content_file}"
+            ) from err
         edits.append(Edit(repo_path=repo_path, content_file=content_file))
     return edits
 
@@ -671,11 +692,18 @@ def propose_pr(
         diff = subprocess.run(
             ["git", "-C", str(worktree), "diff", "--cached", "--quiet"],
             capture_output=True,
+            text=True,
         )
         if diff.returncode == 0:
             return _fail(
                 f"no changes vs {base}", detail="no-op"
             ).model_copy(update={"dir": result_dir, "base_branch": base})
+        if diff.returncode != 1:
+            # --quiet contract: 0 = clean, 1 = changes; anything else is a
+            # real git error — do NOT proceed to commit/push on it
+            raise LocalGitError(
+                diff.stderr.strip() or "git diff --cached failed"
+            )
         _git(worktree, "commit", "-m", message)
         commit_sha = _git(worktree, "rev-parse", "HEAD")
         _git(worktree, "push", "-u", "origin", head)
@@ -737,7 +765,21 @@ def propose_pr(
 
 
 def _default_branch_fallback(path: Path) -> str | None:
-    """`gh repo view` as the last network fallback (spec §3 step 3)."""
+    """Network fallbacks (spec §3 step 3): `remote show`, then `gh repo view`.
+
+    `git remote show origin` comes first so the feature works even when
+    `gh` is missing or unauthenticated.
+    """
+    try:
+        shown = _git(path, "remote", "show", "origin")
+    except LocalGitError:
+        shown = ""
+    for line in shown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("HEAD branch:"):
+            name = stripped.removeprefix("HEAD branch:").strip()
+            if name and name != "(unknown)":
+                return name
     proc = actions._gh(path, "repo", "view", "--json", "defaultBranchRef")
     if proc.returncode != 0:
         return None
@@ -841,9 +883,14 @@ def test_if_match_mismatch_no_branch_no_pr(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_if_match_pass_with_raw_bytes(tmp_path: Path, monkeypatch) -> None:
+    from github_checker.localgit import blob_bytes
+
     _, _, clone = _make_pair(tmp_path)
     _gh_ok(monkeypatch)
-    base_bytes = (clone / "project.yaml").read_bytes()
+    # hash the RAW BLOB at origin/<default> — the contract's comparison
+    # source — not the working-tree file (which smudge filters could skew)
+    base_blob = blob_bytes(clone, "origin/main", "project.yaml")
+    assert base_blob is not None
     content = tmp_path / "new.yaml"
     content.write_text("spec_runner:\n  max_retries: 9\n")
 
@@ -851,7 +898,7 @@ def test_if_match_pass_with_raw_bytes(tmp_path: Path, monkeypatch) -> None:
         clone,
         message="ok",
         edit_args=[f"project.yaml={content}"],
-        if_match_args=[f"project.yaml={hashlib.sha256(base_bytes).hexdigest()}"],
+        if_match_args=[f"project.yaml={hashlib.sha256(base_blob).hexdigest()}"],
     )
     assert result.ok, result.error
 
