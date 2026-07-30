@@ -35,12 +35,12 @@
 | `github_checker/main.py` | **modify** — three subcommands wired to the above. |
 | `tests/test_ghcli.py` | **new** — `run_gh` / `repo_slug` failure modes. |
 | `tests/test_prgate_parse.py` | **new** — `gh` JSON + GraphQL → `PrDetail`, truncation flags. |
-| `tests/test_prgate_gate.py` | **new** — the seven predicates as a pure function. |
+| `tests/test_prgate_gate.py` | **new** — the eight predicates as a pure function. |
 | `tests/test_prgate_merge.py` | **new** — `merge_pr()` re-check, TOCTOU, no-mutation-on-refusal. |
 | `tests/test_post_merge_sync.py` | **new** — real temp git repos. |
 | `tests/test_main.py` | **modify** — CLI wiring and exit codes for the three verbs. |
 
-**Why `prgate.py` and not more of `actions.py`:** `actions.py` is the local/simple whitelist (`pull`, `open-pr`); the gate carries seven predicates, two API shapes and truncation rules. Keeping it separate mirrors the existing split where `propose.py` and `protection.py` each own a subsystem.
+**Why `prgate.py` and not more of `actions.py`:** `actions.py` is the local/simple whitelist (`pull`, `open-pr`); the gate carries eight predicates, two API shapes and truncation rules. Keeping it separate mirrors the existing split where `propose.py` and `protection.py` each own a subsystem.
 
 ---
 
