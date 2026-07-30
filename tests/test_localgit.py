@@ -6,10 +6,16 @@ import pytest
 
 from github_checker.localgit import (
     LocalGitError,
+    delete_branch,
     fetch,
+    has_upstream,
+    is_detached,
     is_git_repo,
     local_status,
+    merged_local_branches,
     pull_ff_only,
+    switch_branch,
+    worktree_holding,
 )
 
 
@@ -235,3 +241,85 @@ def test_blob_bytes_broken_repo_raises(tmp_path: Path) -> None:
 
     with pytest.raises(LocalGitError):
         blob_bytes(tmp_path / "not-a-repo", "origin/main", "f.txt")
+
+
+def _init(path: Path) -> None:
+    """Init a repo directly at *path* (no subdir), branch `master`."""
+    _git(path, "init", "-q", "-b", "master")
+    _git(path, "config", "user.email", "t@example.com")
+    _git(path, "config", "user.name", "t")
+    (path / "f.txt").write_text("one\n")
+    _git(path, "add", "f.txt")
+    _git(path, "commit", "-qm", "init")
+
+
+def test_is_detached_reflects_head_state(tmp_path: Path) -> None:
+    _init(tmp_path)
+    assert is_detached(tmp_path) is False
+    sha = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    _git(tmp_path, "checkout", "-q", sha)
+    assert is_detached(tmp_path) is True
+
+
+def test_has_upstream_is_false_without_a_remote(tmp_path: Path) -> None:
+    _init(tmp_path)
+    assert has_upstream(tmp_path, "master") is False
+
+
+def test_worktree_holding_names_the_other_worktree(tmp_path: Path) -> None:
+    main = tmp_path / "main"
+    main.mkdir()
+    _init(main)
+    _git(main, "branch", "feature")
+    other = tmp_path / "wt"
+    _git(main, "worktree", "add", "-q", str(other), "feature")
+    holder = worktree_holding(main, "feature")
+    assert holder is not None
+    assert "wt" in holder
+    assert worktree_holding(main, "master") is None
+
+
+def test_switch_branch_moves_head(tmp_path: Path) -> None:
+    _init(tmp_path)
+    _git(tmp_path, "branch", "feature")
+    switch_branch(tmp_path, "feature")
+    current = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert current == "feature"
+
+
+def test_merged_local_branches_excludes_the_base_and_unmerged_work(
+    tmp_path: Path,
+) -> None:
+    _init(tmp_path)
+    _git(tmp_path, "checkout", "-q", "-b", "done")
+    _git(tmp_path, "checkout", "-q", "master")
+    _git(tmp_path, "checkout", "-q", "-b", "wip")
+    (tmp_path / "g.txt").write_text("two\n")
+    _git(tmp_path, "add", "g.txt")
+    _git(tmp_path, "commit", "-qm", "wip")
+    _git(tmp_path, "checkout", "-q", "master")
+    merged = merged_local_branches(tmp_path, "master")
+    assert "done" in merged
+    assert "wip" not in merged
+    assert "master" not in merged
+
+
+def test_delete_branch_refuses_unmerged_work(tmp_path: Path) -> None:
+    _init(tmp_path)
+    _git(tmp_path, "checkout", "-q", "-b", "wip")
+    (tmp_path / "g.txt").write_text("two\n")
+    _git(tmp_path, "add", "g.txt")
+    _git(tmp_path, "commit", "-qm", "wip")
+    _git(tmp_path, "checkout", "-q", "master")
+    with pytest.raises(LocalGitError):
+        delete_branch(tmp_path, "wip")
