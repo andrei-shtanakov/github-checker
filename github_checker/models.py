@@ -143,6 +143,7 @@ class PrDetail(BaseModel):
     base_branch: str
     review_decision: str | None = None
     checks: list[CheckRun] = []
+    checks_truncated: bool = False
     files: list[ChangedFile] = []
     files_total: int = 0
     files_truncated: bool = False

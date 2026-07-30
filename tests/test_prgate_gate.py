@@ -93,6 +93,19 @@ def test_untruncated_threads_do_not_block() -> None:
     assert evaluate_gate(detail).passed is True
 
 
+def test_truncated_checks_block_even_when_every_visible_check_is_green() -> None:
+    """gh caps the rollup at 100: check 101 could be the failing one."""
+    detail = make_detail(checks_truncated=True)
+    result = evaluate_gate(detail)
+    assert result.passed is False
+    assert "checks-complete" in result.failed
+    assert "checks-green" not in result.failed
+
+
+def test_untruncated_checks_do_not_block() -> None:
+    assert evaluate_gate(make_detail(checks_truncated=False)).passed is True
+
+
 def test_absent_review_decision_is_allowed() -> None:
     """A repo with no required reviewers reports None, not APPROVED."""
     assert evaluate_gate(make_detail(review_decision=None)).passed is True

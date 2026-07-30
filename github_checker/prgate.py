@@ -29,6 +29,12 @@ PR_VIEW_FIELDS = (
 
 _SUCCESSFUL_CHECKS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 
+# gh's embedded PR query asks for `contexts(first:100)` and the --json
+# projection is a flat list with no pageInfo, so the count is the only signal
+# we have that the rollup may be short. Exactly 100 green checks refuses
+# needlessly; that errs in the direction this gate exists to err in.
+CHECKS_ROLLUP_CAP = 100
+
 
 def _check_state(item: dict[str, Any]) -> str:
     """Flatten a check run or a legacy status context to one state word."""
@@ -72,6 +78,7 @@ def parse_pr_view(data: dict[str, Any], *, file_limit: int) -> PrDetail:
             CheckRun(name=_check_name(item), state=_check_state(item))
             for item in rollup
         ],
+        checks_truncated=len(rollup) >= CHECKS_ROLLUP_CAP,
         files=files,
         files_total=total,
         files_truncated=len(raw_files) > file_limit or total > len(files),
@@ -137,8 +144,17 @@ def _review_threads_connection(page: dict[str, Any]) -> dict[str, Any]:
 def parse_review_threads(page: dict[str, Any]) -> tuple[list[ReviewThread], str | None]:
     """Map one GraphQL page to threads plus the next cursor (None if last)."""
     connection = _review_threads_connection(page)
+    # a present connection still has to positively carry both sub-fields:
+    # `or []` / `or {}` here would turn an unreadable page back into the
+    # "zero threads, read complete" answer the connection guard just refused
+    nodes = connection.get("nodes")
+    if not isinstance(nodes, list):
+        raise GateUnavailable("review-threads connection missing 'nodes'")
+    info = connection.get("pageInfo")
+    if not isinstance(info, dict):
+        raise GateUnavailable("review-threads connection missing 'pageInfo'")
     threads: list[ReviewThread] = []
-    for node in connection.get("nodes") or []:
+    for node in nodes:
         comments = (node.get("comments") or {}).get("nodes") or []
         first = comments[0] if comments else {}
         body = first.get("body")
@@ -152,7 +168,6 @@ def parse_review_threads(page: dict[str, Any]) -> tuple[list[ReviewThread], str 
                 excerpt=body[:_EXCERPT_CHARS] if body else None,
             )
         )
-    info = connection.get("pageInfo") or {}
     cursor = info.get("endCursor") if info.get("hasNextPage") else None
     return threads, cursor
 
@@ -194,7 +209,13 @@ def fetch_review_threads(
 
 
 def evaluate_gate(detail: PrDetail) -> GateResult:
-    """Judge a PR against every merge predicate; report all failures at once."""
+    """Judge a PR against every merge predicate; report all failures at once.
+
+    `detail.merge_state_status` is deliberately **not** consulted, though it is
+    fetched and shown by `pr-detail`. Gating on it would also refuse `BEHIND`
+    and `UNSTABLE` — a merge-policy decision (does this tool refuse a PR that
+    is merely behind its base?) that belongs to the repo owner, not here.
+    """
     failed: list[str] = []
     if detail.state != "OPEN":
         failed.append("open")
@@ -204,6 +225,10 @@ def evaluate_gate(detail: PrDetail) -> GateResult:
         failed.append("mergeable")
     if any(check.state not in _SUCCESSFUL_CHECKS for check in detail.checks):
         failed.append("checks-green")
+    if detail.checks_truncated:
+        # усечённый rollup нельзя читать как "все чеки зелёные" — тот же
+        # инвариант, что и threads-complete, только для списка чеков
+        failed.append("checks-complete")
     if detail.review_decision not in (None, "APPROVED"):
         # allowlist, не blocklist: GitHub's reviewDecision enum is documented as
         # extensible, и незнакомое значение должно блокировать, а не проходить
@@ -287,12 +312,14 @@ def pr_detail(
         # rc 0 with the wrong shape is still "state that cannot be
         # established" — data["number"], item["path"] and node["id"] index
         # directly, and a mis-shaped-but-valid-JSON body must close the gate
-        # via GateUnavailable rather than let the raw exception escape the verb
+        # via GateUnavailable rather than let the raw exception escape the
+        # verb. AttributeError is in the tuple because a list whose *items*
+        # are the wrong type reaches item.get(...) / node.get(...).
         detail = parse_pr_view(data, file_limit=file_limit)
         detail.review_threads, detail.threads_truncated = fetch_review_threads(
             path, owner, name, number, binary=binary
         )
-    except (KeyError, TypeError, ValidationError) as err:
+    except (AttributeError, KeyError, TypeError, ValidationError) as err:
         raise GateUnavailable(f"unexpected PR payload shape: {err!r}") from err
     detail.allows_squash = fetch_allows_squash(path, owner, name, binary=binary)
 
@@ -304,6 +331,26 @@ def pr_detail(
     return detail
 
 
+def _merge_failure(
+    path: Path,
+    error: str,
+    *,
+    gate_failed: list[str] | None = None,
+    detail: PrDetail | None = None,
+) -> ActionResult:
+    """One shape for every `merge` refusal, so no field can go missing."""
+    return ActionResult(
+        action="merge",
+        dir=str(path),
+        ok=False,
+        merged=False,
+        local_sync="not_attempted",
+        gate_failed=gate_failed,
+        error=error,
+        pr_detail=detail,
+    )
+
+
 def merge_pr(
     path: Path, number: int, *, if_head: str, binary: str = "gh"
 ) -> ActionResult:
@@ -311,14 +358,7 @@ def merge_pr(
     try:
         detail = pr_detail(path, number, binary=binary)
     except GateUnavailable as err:
-        return ActionResult(
-            action="merge",
-            dir=str(path),
-            ok=False,
-            merged=False,
-            local_sync="not_attempted",
-            error=str(err),
-        )
+        return _merge_failure(path, str(err))
 
     gate = evaluate_gate(detail)
     failed = list(gate.failed)
@@ -326,15 +366,11 @@ def merge_pr(
         # содержимое PR изменилось после того, как оператор его увидел
         failed.append("head-sha")
     if failed:
-        return ActionResult(
-            action="merge",
-            dir=str(path),
-            ok=False,
-            merged=False,
-            local_sync="not_attempted",
+        return _merge_failure(
+            path,
+            "merge gate refused: " + ", ".join(failed),
             gate_failed=failed,
-            error="merge gate refused: " + ", ".join(failed),
-            pr_detail=detail,
+            detail=detail,
         )
 
     proc = run_gh(
@@ -347,19 +383,15 @@ def merge_pr(
         binary=binary,
     )
     if proc.returncode != 0:
-        return ActionResult(
-            action="merge",
-            dir=str(path),
-            ok=False,
-            merged=False,
-            local_sync="not_attempted",
-            error=proc.stderr.strip() or "gh pr merge failed",
-        )
+        return _merge_failure(path, proc.stderr.strip() or "gh pr merge failed")
     return ActionResult(
         action="merge",
         dir=str(path),
         ok=True,
         merged=True,
+        # `merge` never touches the local clone; say so rather than leaving
+        # the field null only on the one path that succeeded
+        local_sync="not_attempted",
         detail=f"pull request #{number} squash-merged",
         pr_url=detail.url,
     )

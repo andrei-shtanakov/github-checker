@@ -35,12 +35,12 @@
 | `github_checker/main.py` | **modify** — three subcommands wired to the above. |
 | `tests/test_ghcli.py` | **new** — `run_gh` / `repo_slug` failure modes. |
 | `tests/test_prgate_parse.py` | **new** — `gh` JSON + GraphQL → `PrDetail`, truncation flags. |
-| `tests/test_prgate_gate.py` | **new** — the eight predicates as a pure function. |
+| `tests/test_prgate_gate.py` | **new** — the nine predicates as a pure function. |
 | `tests/test_prgate_merge.py` | **new** — `merge_pr()` re-check, TOCTOU, no-mutation-on-refusal. |
 | `tests/test_post_merge_sync.py` | **new** — real temp git repos. |
 | `tests/test_main.py` | **modify** — CLI wiring and exit codes for the three verbs. |
 
-**Why `prgate.py` and not more of `actions.py`:** `actions.py` is the local/simple whitelist (`pull`, `open-pr`); the gate carries eight predicates, two API shapes and truncation rules. Keeping it separate mirrors the existing split where `propose.py` and `protection.py` each own a subsystem.
+**Why `prgate.py` and not more of `actions.py`:** `actions.py` is the local/simple whitelist (`pull`, `open-pr`); the gate carries nine predicates, two API shapes and truncation rules. Keeping it separate mirrors the existing split where `propose.py` and `protection.py` each own a subsystem.
 
 ---
 
@@ -659,7 +659,13 @@ git commit -m "feat(prgate): review threads via GraphQL with page-cap truncation
 
 ---
 
-### Task 4: The gate — eight predicates as a pure function
+### Task 4: The gate — nine predicates as a pure function
+
+> **Amended after the final whole-branch review (2026-07-30).** This section
+> was written for eight predicates; a ninth, `checks-complete`, was added
+> before merge. See the truncation paragraph below for why the original
+> reasoning missed it. The predicate table and that paragraph are updated in
+> place; the rest of the section is as originally planned.
 
 **Files:**
 - Modify: `github_checker/prgate.py`, `github_checker/models.py`
@@ -671,7 +677,7 @@ git commit -m "feat(prgate): review threads via GraphQL with page-cap truncation
   `GateResult.passed: bool`, `GateResult.failed: list[str]` (predicate names, stable
   strings — the dispatcher UI shows them verbatim).
 
-**The eight predicates, with their stable names:**
+**The nine predicates, with their stable names:**
 
 | Name | Passes when |
 |------|-------------|
@@ -679,6 +685,7 @@ git commit -m "feat(prgate): review threads via GraphQL with page-cap truncation
 | `not-draft` | `is_draft is False` |
 | `mergeable` | `mergeable == "MERGEABLE"` (so `UNKNOWN` and `CONFLICTING` both fail) |
 | `checks-green` | every check's state is in `{SUCCESS, NEUTRAL, SKIPPED}` |
+| `checks-complete` | `checks_truncated is False` — `gh` caps the rollup at 100 contexts, and a capped read must not be mistaken for "every check is green" |
 | `approvals` | `review_decision` is `APPROVED` **or** `None` (no review required on this repo) — written as an allowlist, so an unrecognised value fails closed rather than passing by default |
 | `threads-resolved` | no `ReviewThread` with `is_resolved is False` |
 | `threads-complete` | `threads_truncated is False` — a page-capped thread read must not be mistaken for "no unresolved threads" |
@@ -693,6 +700,23 @@ PR with zero unresolved threads, the same incomplete-read-looks-like-green inver
 the gate exists to prevent. `files_truncated` and `diff_truncated` get no equivalent
 predicate: the gate never reads files or the diff, so their truncation carries no
 correctness risk.
+
+**Amendment — the same question was never asked of the checks list.** The
+paragraph above is correct about files and the diff, and that correctness is
+exactly what made it look complete. But the test it applies is "does the gate
+read this list?", and the gate *does* read `checks` — so the checks list needed
+a truncation predicate for the same reason threads did, and the original plan
+did not notice. `gh pr view --json statusCheckRollup` is page-capped at 100
+contexts by `gh` itself and the `--json` projection carries no page indicator,
+so `parse_pr_view` sets `checks_truncated` when the rollup arrives at
+`CHECKS_ROLLUP_CAP`, and `checks-complete` blocks on it. A PR with exactly 100
+green checks is therefore refused — a rare false refusal, in the safe direction.
+
+`merge_state_status` is fetched, modelled and shown by `pr-detail`, and the gate
+deliberately does **not** consult it. It would be a positive-confirmation signal
+computed server-side with no page cap, but gating on it would also refuse
+`BEHIND` and `UNSTABLE` — a merge-policy decision for the repo owner, not a
+correctness fix to fold into the gate.
 
 Note `head_sha` is **not** a gate predicate — it is a caller-supplied guard checked
 separately in Task 5, because it compares against an argument, not against state.
@@ -1923,8 +1947,8 @@ github-checker post-merge-sync <dir>           # switch to default, ff-pull, pru
 
 `pr-detail` is a **view**. `merge` is an independent enforcement point: it re-reads
 the PR and re-checks every predicate — `open`, `not-draft`, `mergeable`,
-`checks-green`, `approvals`, `threads-resolved`, `squash-allowed` — plus the
-caller's `--if-head` guard. A stale or widened payload cannot open the gate.
+`checks-green`, `checks-complete`, `approvals`, `threads-resolved`,
+`threads-complete`, `squash-allowed` — plus the caller's `--if-head` guard. A stale or widened payload cannot open the gate.
 Anything that cannot be positively confirmed (including GitHub's `UNKNOWN`
 mergeability) refuses.
 
@@ -1935,7 +1959,8 @@ never `-D`. When there is no local clone the result is
 `ok=true, local_sync="not_applicable"` — the remote merge is still true.
 
 Large PRs are truncated explicitly, never silently: `files_truncated`,
-`diff_truncated` and `threads_truncated` say so in the payload.
+`diff_truncated`, `threads_truncated` and `checks_truncated` say so in the
+payload. The last two also feed the gate; the first two are display-only.
 ````
 
 - [ ] **Step 2: Update `TODO.md`**

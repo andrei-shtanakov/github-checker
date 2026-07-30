@@ -98,6 +98,28 @@ def test_parse_does_not_flag_truncation_when_everything_fits() -> None:
     assert detail.files_total == 1
 
 
+def test_parse_flags_checks_truncation_at_the_gh_rollup_cap() -> None:
+    # gh caps `contexts` at 100 and the --json projection carries no page
+    # indicator, so a full-looking rollup is the only hint it may be short
+    rollup = [
+        {
+            "__typename": "CheckRun",
+            "name": f"check-{i}",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+        }
+        for i in range(prgate.CHECKS_ROLLUP_CAP)
+    ]
+    detail = parse_pr_view(_view(statusCheckRollup=rollup), file_limit=100)
+    assert detail.checks_truncated is True
+    assert len(detail.checks) == prgate.CHECKS_ROLLUP_CAP
+
+
+def test_parse_does_not_flag_checks_truncation_below_the_cap() -> None:
+    detail = parse_pr_view(_view(), file_limit=100)
+    assert detail.checks_truncated is False
+
+
 def test_parse_tolerates_missing_optional_blocks() -> None:
     detail = parse_pr_view(
         _view(statusCheckRollup=None, files=None, reviewDecision=None), file_limit=100
@@ -157,11 +179,31 @@ def test_parse_threads_survives_a_thread_with_no_comments() -> None:
 
 
 def test_parse_threads_handles_an_empty_connection() -> None:
-    # a connection that is genuinely present with nodes: [] is "no threads",
-    # not "could not read threads" — it must return normally, not raise
+    # a connection that is genuinely present with nodes: [] and a real
+    # pageInfo is "no threads", not "could not read threads" — it must return
+    # normally, not raise. The other direction is pinned by the test below.
     threads, cursor = parse_review_threads(_page([]))
     assert threads == []
     assert cursor is None
+
+
+@pytest.mark.parametrize(
+    ("connection", "expected"),
+    [
+        ({}, "nodes"),
+        ({"nodes": None, "pageInfo": {"hasNextPage": False}}, "nodes"),
+        ({"nodes": []}, "pageInfo"),
+        ({"nodes": [], "pageInfo": None}, "pageInfo"),
+    ],
+)
+def test_parse_threads_raises_when_the_connection_lacks_a_subfield(
+    connection: dict, expected: str
+) -> None:
+    # a present-but-hollow connection previously read as "0 unresolved
+    # threads AND the read was complete", opening both thread predicates
+    page = {"data": {"repository": {"pullRequest": {"reviewThreads": connection}}}}
+    with pytest.raises(GateUnavailable, match=expected):
+        parse_review_threads(page)
 
 
 def test_parse_threads_raises_on_graphql_errors_key() -> None:
@@ -380,6 +422,22 @@ def test_pr_detail_raises_on_structurally_wrong_file_entry(
     tmp_path: Path, monkeypatch
 ) -> None:
     bad_view = _view(files=[{"additions": 1, "deletions": 0}])  # no "path"
+    monkeypatch.setattr(prgate, "repo_slug", lambda path, **kw: ("acme", "widget"))
+    monkeypatch.setattr(
+        prgate,
+        "run_gh",
+        lambda path, *a, **kw: _FakeProc(0, stdout=json.dumps(bad_view)),
+    )
+    with pytest.raises(GateUnavailable, match="payload"):
+        pr_detail(tmp_path, 7)
+
+
+def test_pr_detail_raises_when_a_list_item_is_the_wrong_type(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # a well-typed list of wrongly-typed items reaches item.get(...) and
+    # raises AttributeError, not TypeError — it must still close the gate
+    bad_view = _view(statusCheckRollup=["ci-passed"])
     monkeypatch.setattr(prgate, "repo_slug", lambda path, **kw: ("acme", "widget"))
     monkeypatch.setattr(
         prgate,

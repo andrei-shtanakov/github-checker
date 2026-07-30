@@ -61,20 +61,28 @@ side-effect. Выход — JSON `ActionResult`, exit 1 при неуспехе.
 `pr-detail` — это *view*: `gh pr view` + review-треды по GraphQL (до
 `MAX_THREAD_PAGES=5` страниц по `THREAD_PAGE_SIZE=100`) + `gh pr diff`, сведённые
 в один `PrDetail`. `merge` — независимая точка проверки: перед мержем он сам
-заново читает PR через `pr_detail()` и заново вычисляет все восемь предикатов
-гейта — `open`, `not-draft`, `mergeable`, `checks-green`, `approvals`,
-`threads-resolved`, `threads-complete`, `squash-allowed` — плюс собственную
-проверку `--if-head` (расхождение с текущим `headRefOid` PR — тоже отказ).
-Устаревший или подменённый payload не может открыть ворота: гейт всегда судит
-свежее состояние, а не то, что видел вызывающий.
+заново читает PR через `pr_detail()` и заново вычисляет все девять предикатов
+гейта — `open`, `not-draft`, `mergeable`, `checks-green`, `checks-complete`,
+`approvals`, `threads-resolved`, `threads-complete`, `squash-allowed` — плюс
+собственную проверку `--if-head` (расхождение с текущим `headRefOid` PR — тоже
+отказ). Устаревший или подменённый payload не может открыть ворота: гейт всегда
+судит свежее состояние, а не то, что видел вызывающий.
 
 `approvals` — allowlist, не blocklist: проходит только `reviewDecision = None`
 (ревью не требуется репозиторием) или `APPROVED`; любое другое значение —
 включая ещё не описанное будущее значение GitHub'овского enum — блокирует.
-`threads-complete` — восьмой предикат: если постраничное чтение тредов было
-оборвано лимитом страниц, это тоже отказ, потому что усечённый список нельзя
-путать с «открытых тредов нет». `mergeable = UNKNOWN` тоже блокирует — предикат
-`mergeable` требует ровно значения `MERGEABLE`.
+`threads-complete` и `checks-complete` — предикаты полноты чтения: усечённый
+список нельзя путать с «открытых тредов нет» / «все чеки зелёные». Треды
+усекает наш собственный лимит страниц; чеки усекает сам `gh` (`contexts` —
+не более 100, и в `--json`-проекции нет никакого признака следующей страницы,
+так что единственный доступный сигнал — что список пришёл ровно в потолок).
+Ровно 100 зелёных чеков поэтому тоже отказ — редкий ложный отказ в безопасную
+сторону. `mergeable = UNKNOWN` тоже блокирует — предикат `mergeable` требует
+ровно значения `MERGEABLE`.
+
+`mergeStateStatus` читается и показывается в `pr-detail`, но гейт его
+намеренно не спрашивает: он блокировал бы ещё и `BEHIND`/`UNSTABLE`, а это
+уже вопрос merge-политики владельца репозитория, а не корректности гейта.
 
 Отказ гейта возвращает `pr_detail` целиком (чеки, треды, `gate_failed`) для
 диагностики, но перед печатью в CLI из него стирается `diff` — отказ отвечает
@@ -99,10 +107,12 @@ force-switch, ни force-delete не используются. Смерженн�
 stderr. `snapshot` и интерактивный TUI в этот контракт не входят — они
 `ActionResult` не печатают.
 
-Большие PR усекаются явно, не молча: `files_truncated`, `diff_truncated` и
-`threads_truncated` в payload. На гейт влияет только `threads_truncated`
-(через предикат `threads-complete`) — `files_truncated`/`diff_truncated`
-только для отображения.
+Большие PR усекаются явно, не молча: `files_truncated`, `diff_truncated`,
+`threads_truncated` и `checks_truncated` в payload. На гейт влияют
+`threads_truncated` (предикат `threads-complete`) и `checks_truncated`
+(предикат `checks-complete`) — эти два списка гейт читает, поэтому неполнота
+в них меняет вердикт. `files_truncated`/`diff_truncated` только для
+отображения: файлы и диф гейт не читает вовсе.
 
 ### Snapshot-контракт v1 (заморожен)
 
