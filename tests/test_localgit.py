@@ -284,6 +284,31 @@ def test_worktree_holding_names_the_other_worktree(tmp_path: Path) -> None:
     assert worktree_holding(main, "master") is None
 
 
+def test_worktree_holding_does_not_self_match_through_a_symlink(
+    tmp_path: Path,
+) -> None:
+    # git worktree list --porcelain prints *resolved* paths. If the caller's
+    # own path is unresolved (e.g. reached through a symlink, as /tmp is on
+    # macOS), a naive string/Path comparison mismatches the repo's own entry
+    # and makes it look like some other worktree holds its own branch.
+    real = tmp_path / "real"
+    real.mkdir()
+    _init(real)
+    _git(real, "branch", "feature")
+    other = tmp_path / "wt"
+    _git(real, "worktree", "add", "-q", str(other), "feature")
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    # Asking through the unresolved symlink about the repo's OWN checked-out
+    # branch (master) must be None -- it must not report itself.
+    assert worktree_holding(link, "master") is None
+    # A genuinely different worktree must still be named correctly through
+    # the same symlinked path, so the fix isn't just "always return None".
+    holder = worktree_holding(link, "feature")
+    assert holder is not None
+    assert "wt" in holder
+
+
 def test_switch_branch_moves_head(tmp_path: Path) -> None:
     _init(tmp_path)
     _git(tmp_path, "branch", "feature")

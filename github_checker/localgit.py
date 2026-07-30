@@ -166,6 +166,10 @@ def worktree_holding(path: Path, branch: str) -> str | None:
         listing = _git(path, "worktree", "list", "--porcelain")
     except LocalGitError:
         return None
+    # git prints resolved paths, but the caller's *path* may not be (e.g.
+    # /tmp is a symlink into /private on macOS) — resolve both sides, else
+    # a repo reached through a symlink looks like it holds its own branch.
+    resolved = path.resolve()
     current: str | None = None
     for line in listing.splitlines():
         if line.startswith("worktree "):
@@ -174,7 +178,7 @@ def worktree_holding(path: Path, branch: str) -> str | None:
             ref = line.removeprefix("branch ").strip()
             # Compare against the calling path, not just "some worktree",
             # so a repo never reports itself as the holder of its own branch.
-            if ref == f"refs/heads/{branch}" and Path(current) != path:
+            if ref == f"refs/heads/{branch}" and Path(current).resolve() != resolved:
                 return current
     return None
 
