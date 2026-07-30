@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from github_checker.actions import ActionResult
 from github_checker.ghcli import repo_slug, run_gh
 from github_checker.models import (
     ChangedFile,
@@ -292,3 +293,64 @@ def pr_detail(
             diff.stdout, line_limit=diff_line_limit, byte_limit=diff_byte_limit
         )
     return detail
+
+
+def merge_pr(
+    path: Path, number: int, *, if_head: str, binary: str = "gh"
+) -> ActionResult:
+    """Squash-merge a PR only if every predicate still holds at this moment."""
+    try:
+        detail = pr_detail(path, number, binary=binary)
+    except GateUnavailable as err:
+        return ActionResult(
+            action="merge",
+            dir=str(path),
+            ok=False,
+            merged=False,
+            local_sync="not_attempted",
+            error=str(err),
+        )
+
+    gate = evaluate_gate(detail)
+    failed = list(gate.failed)
+    if detail.head_sha != if_head:
+        # содержимое PR изменилось после того, как оператор его увидел
+        failed.append("head-sha")
+    if failed:
+        return ActionResult(
+            action="merge",
+            dir=str(path),
+            ok=False,
+            merged=False,
+            local_sync="not_attempted",
+            gate_failed=failed,
+            error="merge gate refused: " + ", ".join(failed),
+            pr_detail=detail,
+        )
+
+    proc = run_gh(
+        path,
+        "pr",
+        "merge",
+        str(number),
+        "--squash",
+        "--delete-branch",
+        binary=binary,
+    )
+    if proc.returncode != 0:
+        return ActionResult(
+            action="merge",
+            dir=str(path),
+            ok=False,
+            merged=False,
+            local_sync="not_attempted",
+            error=proc.stderr.strip() or "gh pr merge failed",
+        )
+    return ActionResult(
+        action="merge",
+        dir=str(path),
+        ok=True,
+        merged=True,
+        detail=f"pull request #{number} squash-merged",
+        pr_url=detail.url,
+    )

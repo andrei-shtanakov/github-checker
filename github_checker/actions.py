@@ -19,7 +19,7 @@ from github_checker.localgit import (
     local_status,
     pull_ff_only,
 )
-from github_checker.models import LocalStatus
+from github_checker.models import LocalStatus, PrDetail
 
 
 class ActionResult(BaseModel):
@@ -37,6 +37,10 @@ class ActionResult(BaseModel):
     base_branch: str | None = None
     commit_sha: str | None = None
     changed_paths: list[str] | None = None
+    merged: bool | None = None
+    local_sync: str | None = None  # ok | failed | not_attempted | not_applicable
+    gate_failed: list[str] | None = None
+    pr_detail: PrDetail | None = None
 
 
 def pull(path: Path) -> ActionResult:
