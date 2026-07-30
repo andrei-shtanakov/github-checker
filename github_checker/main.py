@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import sys
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -14,6 +16,9 @@ from github_checker.config import (
     resolve_config_path,
 )
 from github_checker.github import gh_ready
+
+if TYPE_CHECKING:
+    from github_checker.actions import ActionResult
 
 
 def _run_tui(config: Path | None) -> None:
@@ -68,6 +73,105 @@ def _run_propose(args: argparse.Namespace) -> None:
     print(result.model_dump_json(indent=2))
     if not result.ok:
         raise SystemExit(1)
+
+
+def _emit(result: "ActionResult") -> None:
+    """Print one JSON ActionResult and honour the exit-code contract."""
+    print(result.model_dump_json(indent=2))
+    if not result.ok:
+        raise SystemExit(1)
+
+
+def _run_pr_detail(args: argparse.Namespace) -> None:
+    """Read one PR and print it inside an ActionResult envelope."""
+    from github_checker import prgate
+    from github_checker.actions import ActionResult
+
+    try:
+        detail = prgate.pr_detail(
+            args.dir,
+            args.pr,
+            file_limit=args.file_limit,
+            diff_line_limit=args.diff_lines,
+        )
+    except prgate.GateUnavailable as err:
+        _emit(
+            ActionResult(
+                action="pr-detail", dir=str(args.dir), ok=False, error=str(err)
+            )
+        )
+        return
+    _emit(
+        ActionResult(action="pr-detail", dir=str(args.dir), ok=True, pr_detail=detail)
+    )
+
+
+def _run_merge(args: argparse.Namespace) -> None:
+    """Squash-merge one PR behind the fail-closed gate."""
+    from github_checker import prgate
+    from github_checker.actions import ActionResult
+
+    if not args.if_head:
+        _emit(
+            ActionResult(
+                action="merge",
+                dir=str(args.dir),
+                ok=False,
+                merged=False,
+                error="--if-head is required",
+            )
+        )
+        return
+    result = prgate.merge_pr(args.dir, args.pr, if_head=args.if_head)
+    if result.pr_detail is not None and result.pr_detail.diff is not None:
+        # A refusal embeds the full PrDetail (checks, threads, gate_failed
+        # reasons) for diagnosis, but its diff can run to 2000 lines / 200KB.
+        # `merge` answers "why refused", not "what changed" — a caller who
+        # wants the diff itself already has `pr-detail` for that, and a
+        # human staring at a terminal shouldn't get a diff dump instead of
+        # a reason. `diff=None` is the model's existing "not fetched" state,
+        # so this doesn't add a new, ambiguous shape to the contract.
+        result = result.model_copy(
+            update={"pr_detail": result.pr_detail.model_copy(update={"diff": None})}
+        )
+    _emit(result)
+
+
+def _run_post_merge_sync(args: argparse.Namespace) -> None:
+    """Return the clone to a freshly pulled default branch."""
+    from github_checker.actions import post_merge_sync
+
+    _emit(post_merge_sync(args.dir))
+
+
+def _dispatch_guarded(
+    action: str, directory: Path, handler: Callable[[], None]
+) -> None:
+    """Run a verb handler; turn any exception `_emit` didn't already catch
+    into a failed ActionResult instead of a bare traceback.
+
+    Known failure modes (GateUnavailable, missing --if-head, ...) are already
+    handled inside each `_run_*` and reach `_emit` as JSON. This is the
+    outermost net for everything else: it protects the "one JSON ActionResult
+    on stdout" contract from an unforeseen bug, at the cost of turning that
+    bug into a quieter failure. The exception type stays in `error` so it's
+    still diagnosable, not just swallowed.
+    """
+    from github_checker.actions import ActionResult
+
+    try:
+        handler()
+    except SystemExit:
+        raise  # _emit's own ok=False exit — not an unforeseen failure
+    except Exception as err:
+        _emit(
+            ActionResult(
+                action=action,
+                dir=str(directory),
+                ok=False,
+                error=f"{type(err).__name__}: {err}",
+            )
+        )
 
 
 def main() -> None:
@@ -143,6 +247,36 @@ def main() -> None:
         default=None,
         help="head branch name (generated if omitted)",
     )
+    detail_p = sub.add_parser(
+        "pr-detail",
+        help="read one PR (state, checks, files, diff, review threads) as JSON",
+    )
+    detail_p.add_argument("dir", type=Path, help="path to the local clone")
+    detail_p.add_argument("pr", type=int, help="pull request number")
+    detail_p.add_argument(
+        "--file-limit", type=int, default=100, help="max files listed (default: 100)"
+    )
+    detail_p.add_argument(
+        "--diff-lines", type=int, default=2000, help="max diff lines (default: 2000)"
+    )
+
+    merge_p = sub.add_parser(
+        "merge", help="squash-merge a PR if every gate predicate holds; JSON result"
+    )
+    merge_p.add_argument("dir", type=Path, help="path to the local clone")
+    merge_p.add_argument("pr", type=int, help="pull request number")
+    # NOT required=True: argparse would exit(2) with usage on stderr and break
+    # the headless JSON contract; _run_merge validates and returns ok=False.
+    merge_p.add_argument(
+        "--if-head", dest="if_head", default=None, help="head SHA the caller saw"
+    )
+
+    sync_p = sub.add_parser(
+        "post-merge-sync",
+        help="switch to the default branch, ff-pull, prune merged branches",
+    )
+    sync_p.add_argument("dir", type=Path, help="path to the local clone")
+
     args = parser.parse_args()
     if args.command == "snapshot":
         _run_snapshot(args.workspace, args.local_only, args.indent or None)
@@ -150,6 +284,14 @@ def main() -> None:
         _run_action(args.command, args.dir)
     elif args.command == "propose-pr":
         _run_propose(args)
+    elif args.command == "pr-detail":
+        _dispatch_guarded("pr-detail", args.dir, lambda: _run_pr_detail(args))
+    elif args.command == "merge":
+        _dispatch_guarded("merge", args.dir, lambda: _run_merge(args))
+    elif args.command == "post-merge-sync":
+        _dispatch_guarded(
+            "post-merge-sync", args.dir, lambda: _run_post_merge_sync(args)
+        )
     else:
         _run_tui(args.config)
 
