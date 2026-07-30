@@ -195,7 +195,17 @@ def post_merge_sync(path: Path) -> ActionResult:
 
     removed: list[str] = []
     kept: list[str] = []
-    for branch in merged_local_branches(path, default):
+    cleanup_note = ""
+    try:
+        candidates = merged_local_branches(path, default)
+    except LocalGitError as err:
+        # Listing failed (e.g. a user-side `branch.sort` misconfiguration) —
+        # the sync itself already succeeded, so this stays ok=True; branch
+        # cleanup is cosmetic, not part of the contract.
+        candidates = []
+        cleanup_note = f"; branch cleanup skipped: {err}"
+
+    for branch in candidates:
         try:
             delete_branch(path, branch)
             removed.append(branch)
@@ -207,6 +217,7 @@ def post_merge_sync(path: Path) -> ActionResult:
         detail += f"; deleted {len(removed)} merged branch(es)"
     if kept:
         detail += f"; kept {', '.join(kept)}"
+    detail += cleanup_note
     return ActionResult(
         action="post-merge-sync",
         dir=str(path),

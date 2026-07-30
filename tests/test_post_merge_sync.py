@@ -44,11 +44,19 @@ def test_missing_clone_is_not_applicable_not_an_error(tmp_path: Path) -> None:
 
 
 def test_clean_clone_syncs_and_reports_ok(tmp_path: Path) -> None:
-    _, clone = make_pair(tmp_path)
+    origin, clone = make_pair(tmp_path)
+    # Advance origin past the clone so the sync has real fast-forwarding to
+    # do — without this, pull_ff_only is a no-op and the test proves nothing.
+    seed = tmp_path / "seed"
+    (seed / "f.txt").write_text("two\n")
+    _run(seed, "commit", "-qam", "second")
+    _run(seed, "push", "-q", str(origin), "master")
+
     result = post_merge_sync(clone)
     assert result.ok is True
     assert result.local_sync == "ok"
     assert result.branch == "master"
+    assert (clone / "f.txt").read_text() == "two\n"
 
 
 def test_dirty_tree_is_refused_and_changes_survive(tmp_path: Path) -> None:
@@ -63,10 +71,26 @@ def test_dirty_tree_is_refused_and_changes_survive(tmp_path: Path) -> None:
 
 def test_untracked_file_also_refuses(tmp_path: Path) -> None:
     _, clone = make_pair(tmp_path)
+    branch_before = subprocess.run(
+        ["git", "-C", str(clone), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
     (clone / "scratch.txt").write_text("notes\n")
     result = post_merge_sync(clone)
     assert result.ok is False
+    assert result.local_sync == "failed"
     assert (clone / "scratch.txt").exists()
+    assert (clone / "scratch.txt").read_text() == "notes\n"
+    assert (clone / "f.txt").read_text() == "one\n"
+    branch_after = subprocess.run(
+        ["git", "-C", str(clone), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert branch_after == branch_before
 
 
 def test_detached_head_is_refused(tmp_path: Path) -> None:
@@ -111,3 +135,20 @@ def test_merged_branch_is_deleted_and_unmerged_work_is_kept(tmp_path: Path) -> N
     ).stdout.split()
     assert "already-merged" not in branches
     assert "keep-me" in branches
+
+
+def test_broken_branch_sort_config_does_not_crash_the_sync(tmp_path: Path) -> None:
+    """A real-world `git branch --merged` failure must not escape as a raise.
+
+    `branch.sort` is an ordinary user-side git config knob; a bogus value
+    makes `git branch --merged` exit 128. The sync itself (fetch/switch/
+    pull) has already succeeded by the time branch cleanup runs, so this
+    must still report ok=True — only cleanup is skipped, and skipped
+    visibly, not silently.
+    """
+    _, clone = make_pair(tmp_path)
+    _run(clone, "config", "branch.sort", "bogus")
+    result = post_merge_sync(clone)
+    assert result.ok is True
+    assert result.local_sync == "ok"
+    assert "branch cleanup skipped" in (result.detail or "")
