@@ -102,14 +102,37 @@ query($owner:String!,$name:String!,$number:Int!,$cursor:String){
 )
 
 
+def _review_threads_connection(page: dict[str, Any]) -> dict[str, Any]:
+    """The `reviewThreads` connection, or raise if it isn't positively there.
+
+    A GraphQL error, or a break anywhere in data -> repository ->
+    pullRequest -> reviewThreads, must not be read as "zero threads" — that
+    is the empty-list-opens-the-gate inversion this verb exists to prevent.
+    An actually-present connection (even with `nodes: []`) is a legitimate
+    empty result and is returned as-is.
+    """
+    if "errors" in page:
+        raise GateUnavailable(
+            f"review-threads response carried errors: {page['errors']!r}"
+        )
+    data = page.get("data")
+    if not isinstance(data, dict):
+        raise GateUnavailable("review-threads response missing 'data'")
+    repository = data.get("repository")
+    if not isinstance(repository, dict):
+        raise GateUnavailable("review-threads response missing 'repository'")
+    pull_request = repository.get("pullRequest")
+    if not isinstance(pull_request, dict):
+        raise GateUnavailable("review-threads response missing 'pullRequest'")
+    connection = pull_request.get("reviewThreads")
+    if not isinstance(connection, dict):
+        raise GateUnavailable("review-threads response missing 'reviewThreads'")
+    return connection
+
+
 def parse_review_threads(page: dict[str, Any]) -> tuple[list[ReviewThread], str | None]:
     """Map one GraphQL page to threads plus the next cursor (None if last)."""
-    connection = (
-        page.get("data", {})
-        .get("repository", {})
-        .get("pullRequest", {})
-        .get("reviewThreads", {})
-    )
+    connection = _review_threads_connection(page)
     threads: list[ReviewThread] = []
     for node in connection.get("nodes") or []:
         comments = (node.get("comments") or {}).get("nodes") or []

@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from github_checker import prgate
 from github_checker.prgate import (
     GateUnavailable,
@@ -152,9 +154,39 @@ def test_parse_threads_survives_a_thread_with_no_comments() -> None:
 
 
 def test_parse_threads_handles_an_empty_connection() -> None:
+    # a connection that is genuinely present with nodes: [] is "no threads",
+    # not "could not read threads" — it must return normally, not raise
     threads, cursor = parse_review_threads(_page([]))
     assert threads == []
     assert cursor is None
+
+
+def test_parse_threads_raises_on_graphql_errors_key() -> None:
+    page = {"errors": [{"message": "Could not resolve to a PullRequest"}]}
+    with pytest.raises(GateUnavailable, match="errors"):
+        parse_review_threads(page)
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        {},
+        {"data": None},
+        {"data": {}},
+        {"data": {"repository": None}},
+        {"data": {"repository": {}}},
+        {"data": {"repository": {"pullRequest": None}}},
+        {"data": {"repository": {"pullRequest": {}}}},
+        {"data": {"repository": {"pullRequest": {"reviewThreads": None}}}},
+    ],
+)
+def test_parse_threads_raises_when_any_link_in_the_chain_is_missing(
+    page: dict,
+) -> None:
+    # every break point between data and reviewThreads must fail closed,
+    # never fall through to "[]" via chained .get(..., {}) defaults
+    with pytest.raises(GateUnavailable, match="missing"):
+        parse_review_threads(page)
 
 
 class _FakeProc:
@@ -169,12 +201,8 @@ def test_fetch_threads_raises_when_gh_fails(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(
         prgate, "run_gh", lambda path, *a, **kw: _FakeProc(1, stderr="boom")
     )
-    try:
+    with pytest.raises(GateUnavailable, match="boom"):
         fetch_review_threads(tmp_path, "acme", "widget", 7)
-    except GateUnavailable as err:
-        assert "boom" in str(err)
-    else:
-        raise AssertionError("expected GateUnavailable, got a normal return")
 
 
 def test_fetch_threads_raises_on_unparseable_output(
@@ -183,12 +211,23 @@ def test_fetch_threads_raises_on_unparseable_output(
     monkeypatch.setattr(
         prgate, "run_gh", lambda path, *a, **kw: _FakeProc(0, stdout="not json")
     )
-    try:
+    with pytest.raises(GateUnavailable, match="non-JSON"):
         fetch_review_threads(tmp_path, "acme", "widget", 7)
-    except GateUnavailable:
-        pass
-    else:
-        raise AssertionError("expected GateUnavailable, got a normal return")
+
+
+def test_fetch_threads_raises_when_response_has_no_data_chain(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # a body that parses as JSON but never positively presents reviewThreads
+    # (e.g. GraphQL-level errors) must not flow through as an empty list —
+    # the guard lives in parse_review_threads but must protect the fetcher too
+    monkeypatch.setattr(
+        prgate,
+        "run_gh",
+        lambda path, *a, **kw: _FakeProc(0, stdout=json.dumps({"errors": ["boom"]})),
+    )
+    with pytest.raises(GateUnavailable, match="errors"):
+        fetch_review_threads(tmp_path, "acme", "widget", 7)
 
 
 def test_fetch_threads_aggregates_pages_until_exhausted(
