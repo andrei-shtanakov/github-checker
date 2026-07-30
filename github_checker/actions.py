@@ -7,11 +7,11 @@ creates (or reports) a pull request for an already-pushed branch.
 """
 
 import json
-import subprocess
 from pathlib import Path
 
 from pydantic import BaseModel
 
+from github_checker.ghcli import run_gh
 from github_checker.localgit import (
     LocalGitError,
     head_rev,
@@ -37,22 +37,6 @@ class ActionResult(BaseModel):
     base_branch: str | None = None
     commit_sha: str | None = None
     changed_paths: list[str] | None = None
-
-
-def _gh(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    """Run gh; never raises — a missing binary or timeout becomes a failed result."""
-    try:
-        return subprocess.run(
-            ["gh", *args],
-            cwd=path,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as err:
-        return subprocess.CompletedProcess(
-            ["gh", *args], returncode=127, stdout="", stderr=str(err)
-        )
 
 
 def pull(path: Path) -> ActionResult:
@@ -93,7 +77,7 @@ def open_pr(path: Path) -> ActionResult:
             action="open-pr", dir=str(path), ok=False, error="not a git repository"
         )
 
-    view = _gh(path, "pr", "view", "--json", "url,state")
+    view = run_gh(path, "pr", "view", "--json", "url,state")
     if view.returncode == 0:
         try:
             data = json.loads(view.stdout)
@@ -116,7 +100,7 @@ def open_pr(path: Path) -> ActionResult:
                 pr_state="OPEN",
             )
 
-    created = _gh(path, "pr", "create", "--fill")
+    created = run_gh(path, "pr", "create", "--fill")
     if created.returncode != 0:
         return ActionResult(
             action="open-pr",

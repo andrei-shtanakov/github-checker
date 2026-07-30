@@ -87,7 +87,7 @@ def test_main_propose_pr_happy_path_prints_ok_result(
     clone = _make_pair(tmp_path)
     monkeypatch.setattr(
         actions,
-        "_gh",
+        "run_gh",
         lambda path, *args: subprocess.CompletedProcess(
             ["gh", *args], 0, stdout="https://github.com/o/r/pull/7\n"
         ),

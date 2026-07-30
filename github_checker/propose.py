@@ -219,7 +219,7 @@ def propose_pr(
         commit_sha = _git(worktree, "rev-parse", "HEAD")
         _git(worktree, "push", "-u", "origin", head)
         pushed = True
-        created = actions._gh(worktree, "pr", "create", "--fill")
+        created = actions.run_gh(worktree, "pr", "create", "--fill")
         if created.returncode != 0:
             return _cleanup_remote_after_gh_failure(
                 path,
@@ -297,7 +297,7 @@ def _default_branch_fallback(path: Path) -> str | None:
             name = stripped.removeprefix("HEAD branch:").strip()
             if name and name != "(unknown)":
                 return name
-    proc = actions._gh(path, "repo", "view", "--json", "defaultBranchRef")
+    proc = actions.run_gh(path, "repo", "view", "--json", "defaultBranchRef")
     if proc.returncode != 0:
         return None
     try:
