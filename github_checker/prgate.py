@@ -201,10 +201,15 @@ def evaluate_gate(detail: PrDetail) -> GateResult:
         failed.append("mergeable")
     if any(check.state not in _SUCCESSFUL_CHECKS for check in detail.checks):
         failed.append("checks-green")
-    if detail.review_decision in ("CHANGES_REQUESTED", "REVIEW_REQUIRED"):
+    if detail.review_decision not in (None, "APPROVED"):
+        # allowlist, не blocklist: GitHub's reviewDecision enum is documented as
+        # extensible, и незнакомое значение должно блокировать, а не проходить
         failed.append("approvals")
     if any(not thread.is_resolved for thread in detail.review_threads):
         failed.append("threads-resolved")
+    if detail.threads_truncated:
+        # неполный список тредов не должен читаться как "нет открытых тредов"
+        failed.append("threads-complete")
     if detail.allows_squash is not True:
         failed.append("squash-allowed")
     return GateResult(passed=not failed, failed=failed)

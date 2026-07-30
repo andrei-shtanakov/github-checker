@@ -43,6 +43,7 @@ def test_green_pr_passes() -> None:
         ({"checks": [CheckRun(name="t", state="PENDING")]}, "checks-green"),
         ({"review_decision": "CHANGES_REQUESTED"}, "approvals"),
         ({"review_decision": "REVIEW_REQUIRED"}, "approvals"),
+        ({"review_decision": "SOMETHING_NEW"}, "approvals"),
         ({"allows_squash": False}, "squash-allowed"),
         ({"allows_squash": None}, "squash-allowed"),
     ],
@@ -72,6 +73,22 @@ def test_unresolved_thread_blocks_regardless_of_author() -> None:
 def test_resolved_threads_do_not_block() -> None:
     detail = make_detail(
         review_threads=[ReviewThread(id="t1", is_resolved=True, author="anyone")]
+    )
+    assert evaluate_gate(detail).passed is True
+
+
+def test_truncated_threads_block_even_with_an_empty_list() -> None:
+    """The false-green case: the page cap hid every thread, not zero threads."""
+    detail = make_detail(review_threads=[], threads_truncated=True)
+    result = evaluate_gate(detail)
+    assert result.passed is False
+    assert "threads-complete" in result.failed
+
+
+def test_untruncated_threads_do_not_block() -> None:
+    detail = make_detail(
+        review_threads=[ReviewThread(id="t1", is_resolved=True)],
+        threads_truncated=False,
     )
     assert evaluate_gate(detail).passed is True
 

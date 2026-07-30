@@ -659,7 +659,7 @@ git commit -m "feat(prgate): review threads via GraphQL with page-cap truncation
 
 ---
 
-### Task 4: The gate — seven predicates as a pure function
+### Task 4: The gate — eight predicates as a pure function
 
 **Files:**
 - Modify: `github_checker/prgate.py`, `github_checker/models.py`
@@ -671,7 +671,7 @@ git commit -m "feat(prgate): review threads via GraphQL with page-cap truncation
   `GateResult.passed: bool`, `GateResult.failed: list[str]` (predicate names, stable
   strings — the dispatcher UI shows them verbatim).
 
-**The seven predicates, with their stable names:**
+**The eight predicates, with their stable names:**
 
 | Name | Passes when |
 |------|-------------|
@@ -679,9 +679,20 @@ git commit -m "feat(prgate): review threads via GraphQL with page-cap truncation
 | `not-draft` | `is_draft is False` |
 | `mergeable` | `mergeable == "MERGEABLE"` (so `UNKNOWN` and `CONFLICTING` both fail) |
 | `checks-green` | every check's state is in `{SUCCESS, NEUTRAL, SKIPPED}` |
-| `approvals` | `review_decision` is `APPROVED` **or** `None` (no review required on this repo) — but never `CHANGES_REQUESTED` / `REVIEW_REQUIRED` |
+| `approvals` | `review_decision` is `APPROVED` **or** `None` (no review required on this repo) — written as an allowlist, so an unrecognised value fails closed rather than passing by default |
 | `threads-resolved` | no `ReviewThread` with `is_resolved is False` |
+| `threads-complete` | `threads_truncated is False` — a page-capped thread read must not be mistaken for "no unresolved threads" |
 | `squash-allowed` | `allows_squash is True` |
+
+`approvals` is an allowlist rather than a blocklist on purpose: GitHub documents its
+GraphQL enums as extensible, so a value this code has never seen must block, not
+silently pass. `threads-complete` exists because `fetch_review_threads` can return
+`truncated=True` with a partial (possibly empty) `review_threads` list when the page
+cap is hit — without this predicate that partial read is indistinguishable from a
+PR with zero unresolved threads, the same incomplete-read-looks-like-green inversion
+the gate exists to prevent. `files_truncated` and `diff_truncated` get no equivalent
+predicate: the gate never reads files or the diff, so their truncation carries no
+correctness risk.
 
 Note `head_sha` is **not** a gate predicate — it is a caller-supplied guard checked
 separately in Task 5, because it compares against an argument, not against state.
