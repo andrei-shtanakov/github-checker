@@ -102,6 +102,57 @@ class LocalStatus(BaseModel):
     error: str | None = None
 
 
+class ChangedFile(BaseModel):
+    """One file touched by a pull request."""
+
+    path: str
+    additions: int = 0
+    deletions: int = 0
+
+
+class CheckRun(BaseModel):
+    """A normalised CI signal: check run and legacy status look the same here."""
+
+    name: str
+    state: str  # SUCCESS | FAILURE | PENDING | SKIPPED | ...
+
+
+class ReviewThread(BaseModel):
+    """A review conversation and whether it is still open."""
+
+    id: str
+    is_resolved: bool
+    is_outdated: bool = False
+    path: str | None = None
+    author: str | None = None
+    excerpt: str | None = None
+
+
+class PrDetail(BaseModel):
+    """Everything the merge gate reads about one pull request."""
+
+    number: int
+    title: str
+    url: str
+    state: str
+    is_draft: bool
+    mergeable: str
+    merge_state_status: str | None = None
+    head_branch: str
+    head_sha: str
+    base_branch: str
+    review_decision: str | None = None
+    checks: list[CheckRun] = []
+    files: list[ChangedFile] = []
+    files_total: int = 0
+    files_truncated: bool = False
+    review_threads: list[ReviewThread] = []
+    threads_truncated: bool = False
+    diff: str | None = None
+    diff_truncated: bool = False
+    allows_squash: bool | None = None
+
+
 class RepoState(BaseModel):
     """Everything the TUI shows about one repository."""
 
