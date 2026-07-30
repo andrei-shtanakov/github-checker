@@ -137,3 +137,63 @@ def blob_bytes(path: Path, ref: str, repo_path: str) -> bytes | None:
             return None
         raise LocalGitError(stderr or "git cat-file failed")
     return result.stdout
+
+
+def is_detached(path: Path) -> bool:
+    """True when HEAD points at a commit rather than a branch.
+
+    Unknown counts as detached — the caller treats detached as a refusal,
+    so guessing "attached" here would let a switch proceed blindly.
+    """
+    try:
+        return _git(path, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+    except LocalGitError:
+        return True
+
+
+def has_upstream(path: Path, branch: str) -> bool:
+    """True when *branch* has a configured upstream ref."""
+    try:
+        _git(path, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}")
+    except LocalGitError:
+        return False
+    return True
+
+
+def worktree_holding(path: Path, branch: str) -> str | None:
+    """Path of another worktree that has *branch* checked out, else None."""
+    try:
+        listing = _git(path, "worktree", "list", "--porcelain")
+    except LocalGitError:
+        return None
+    # git prints resolved paths, but the caller's *path* may not be (e.g.
+    # /tmp is a symlink into /private on macOS) — resolve both sides, else
+    # a repo reached through a symlink looks like it holds its own branch.
+    resolved = path.resolve()
+    current: str | None = None
+    for line in listing.splitlines():
+        if line.startswith("worktree "):
+            current = line.removeprefix("worktree ").strip()
+        elif line.startswith("branch ") and current is not None:
+            ref = line.removeprefix("branch ").strip()
+            # Compare against the calling path, not just "some worktree",
+            # so a repo never reports itself as the holder of its own branch.
+            if ref == f"refs/heads/{branch}" and Path(current).resolve() != resolved:
+                return current
+    return None
+
+
+def switch_branch(path: Path, branch: str) -> None:
+    """`git switch` to an existing branch; raises rather than forcing."""
+    _git(path, "switch", branch)
+
+
+def merged_local_branches(path: Path, base: str) -> list[str]:
+    """Local branches fully contained in *base* (excluding *base* itself)."""
+    listing = _git(path, "branch", "--merged", base, "--format=%(refname:short)")
+    return [name for name in listing.splitlines() if name and name != base]
+
+
+def delete_branch(path: Path, branch: str) -> None:
+    """Delete a local branch with `-d` — never `-D`; unmerged work raises."""
+    _git(path, "branch", "-d", branch)

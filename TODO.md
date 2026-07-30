@@ -25,6 +25,16 @@
 
 ---
 
+## Сделано
+
+- [x] Merge-gate: три новых глагола `pr-detail`/`merge`/`post-merge-sync` @id:merge-gate-verbs
+      Fail-closed squash-merge за девятью предикатами (`open`, `not-draft`,
+      `mergeable`, `checks-green`, `checks-complete`, `approvals`,
+      `threads-resolved`, `threads-complete`, `squash-allowed`) плюс
+      `--if-head`-guard против подмены payload'а; безопасный пост-мерж синк
+      локального клона (никогда stash/reset/force). Документировано в
+      `README.md`. (PR #14)
+
 ## Кросс-репные контракты
 
 - [ ] Опубликовать `contracts/actions/v1` — версионировать поведение headless-действий как контракт @owner:github:andrei-shtanakov @id:contracts-actions-v1

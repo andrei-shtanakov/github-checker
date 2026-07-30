@@ -96,7 +96,9 @@ class _FakeProc:
 def test_open_pr_reports_existing(tmp_path: Path, monkeypatch) -> None:
     _, clone = _make_pair(tmp_path)
     view = json.dumps({"url": "https://github.com/o/r/pull/5", "state": "OPEN"})
-    monkeypatch.setattr(actions, "_gh", lambda path, *args: _FakeProc(0, stdout=view))
+    monkeypatch.setattr(
+        actions, "run_gh", lambda path, *args: _FakeProc(0, stdout=view)
+    )
     result = open_pr(clone)
     assert result.ok
     assert result.detail == "pull request already open"
@@ -112,7 +114,7 @@ def test_open_pr_creates_when_none(tmp_path: Path, monkeypatch) -> None:
         assert args[:3] == ("pr", "create", "--fill")
         return _FakeProc(0, stdout="https://github.com/o/r/pull/6\n")
 
-    monkeypatch.setattr(actions, "_gh", fake_gh)
+    monkeypatch.setattr(actions, "run_gh", fake_gh)
     result = open_pr(clone)
     assert result.ok
     assert result.pr_url == "https://github.com/o/r/pull/6"
@@ -129,7 +131,7 @@ def test_open_pr_garbage_view_output_fails_without_create(
         calls.append(args)
         return _FakeProc(0, stdout="not json at all")
 
-    monkeypatch.setattr(actions, "_gh", fake_gh)
+    monkeypatch.setattr(actions, "run_gh", fake_gh)
     result = open_pr(clone)
     assert not result.ok
     assert "non-JSON" in (result.error or "")
@@ -145,20 +147,16 @@ def test_open_pr_create_without_url_fails(tmp_path: Path, monkeypatch) -> None:
             return _FakeProc(1)
         return _FakeProc(0, stdout="   \n")
 
-    monkeypatch.setattr(actions, "_gh", fake_gh)
+    monkeypatch.setattr(actions, "run_gh", fake_gh)
     result = open_pr(clone)
     assert not result.ok
     assert "no PR URL" in (result.error or "")
 
 
-def test_gh_missing_binary_becomes_failed_result(tmp_path: Path, monkeypatch) -> None:
-    def raise_missing(*args, **kwargs):
-        raise FileNotFoundError("No such file or directory: 'gh'")
-
-    monkeypatch.setattr(actions.subprocess, "run", raise_missing)
-    proc = actions._gh(tmp_path, "pr", "view")
+def test_gh_missing_binary_becomes_failed_result(tmp_path: Path) -> None:
+    proc = actions.run_gh(tmp_path, "pr", "view", binary="definitely-not-a-real-binary")
     assert proc.returncode == 127
-    assert "gh" in proc.stderr
+    assert "definitely-not-a-real-binary" in proc.stderr
 
 
 def test_open_pr_surfaces_gh_error(tmp_path: Path, monkeypatch) -> None:
@@ -169,7 +167,7 @@ def test_open_pr_surfaces_gh_error(tmp_path: Path, monkeypatch) -> None:
             return _FakeProc(1)
         return _FakeProc(1, stderr="must first push the current branch")
 
-    monkeypatch.setattr(actions, "_gh", fake_gh)
+    monkeypatch.setattr(actions, "run_gh", fake_gh)
     result = open_pr(clone)
     assert not result.ok
     assert "push" in (result.error or "")

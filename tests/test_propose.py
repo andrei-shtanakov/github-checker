@@ -144,7 +144,7 @@ class _FakeProc:
 def _gh_ok(monkeypatch) -> None:
     monkeypatch.setattr(
         actions,
-        "_gh",
+        "run_gh",
         lambda path, *args: _FakeProc(0, stdout="https://github.com/o/r/pull/7\n"),
     )
 
@@ -337,7 +337,7 @@ def test_gh_failure_after_push_deletes_remote_branch(
 ) -> None:
     origin, _, clone = _make_pair(tmp_path)
     monkeypatch.setattr(
-        actions, "_gh", lambda path, *args: _FakeProc(1, stderr="gh exploded")
+        actions, "run_gh", lambda path, *args: _FakeProc(1, stderr="gh exploded")
     )
     content = tmp_path / "c.txt"
     content.write_text("x\n")
@@ -384,7 +384,7 @@ def test_default_branch_fallback_via_gh_when_remote_show_fails(
     _git(clone, "remote", "set-url", "origin", str(tmp_path / "gone"))
     monkeypatch.setattr(
         actions,
-        "_gh",
+        "run_gh",
         lambda path, *args: _FakeProc(0, stdout='{"defaultBranchRef":{"name":"main"}}'),
     )
     assert _default_branch_fallback(clone) == "main"
@@ -415,7 +415,7 @@ def test_gh_failure_and_delete_failure_surfaces_branch(
         _git(clone, "remote", "set-url", "origin", str(tmp_path / "gone"))
         return _FakeProc(1, stderr="gh exploded")
 
-    monkeypatch.setattr(actions, "_gh", sabotage_gh)
+    monkeypatch.setattr(actions, "run_gh", sabotage_gh)
     content = tmp_path / "c.txt"
     content.write_text("x\n")
 
