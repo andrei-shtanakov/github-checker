@@ -363,6 +363,33 @@ def test_pr_detail_raises_on_non_json_pr_view_output(
         pr_detail(tmp_path, 7)
 
 
+def test_pr_detail_raises_on_empty_pr_view_payload(tmp_path: Path, monkeypatch) -> None:
+    # gh exiting 0 with a body of the wrong shape is still "state that
+    # cannot be established" — the KeyError from data["number"] must not
+    # escape as a raw traceback, it must close the gate like any other
+    # unavailable-state case
+    monkeypatch.setattr(prgate, "repo_slug", lambda path, **kw: ("acme", "widget"))
+    monkeypatch.setattr(
+        prgate, "run_gh", lambda path, *a, **kw: _FakeProc(0, stdout="{}")
+    )
+    with pytest.raises(GateUnavailable, match="payload"):
+        pr_detail(tmp_path, 7)
+
+
+def test_pr_detail_raises_on_structurally_wrong_file_entry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bad_view = _view(files=[{"additions": 1, "deletions": 0}])  # no "path"
+    monkeypatch.setattr(prgate, "repo_slug", lambda path, **kw: ("acme", "widget"))
+    monkeypatch.setattr(
+        prgate,
+        "run_gh",
+        lambda path, *a, **kw: _FakeProc(0, stdout=json.dumps(bad_view)),
+    )
+    with pytest.raises(GateUnavailable, match="payload"):
+        pr_detail(tmp_path, 7)
+
+
 def test_pr_detail_diff_fetch_is_best_effort(tmp_path: Path, monkeypatch) -> None:
     # a failed `gh pr diff` degrades the display only — it must not raise
     fake_gh = _fake_gh_for_pr_detail(

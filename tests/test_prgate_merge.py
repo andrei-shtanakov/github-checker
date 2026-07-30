@@ -1,5 +1,7 @@
 """merge is an enforcement point, not a confirmation of what the screen showed."""
 
+import inspect
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -120,3 +122,49 @@ def test_gh_merge_failure_reports_and_does_not_claim_merged(patched) -> None:
     assert result.ok is False
     assert result.merged is False
     assert "Protected branch" in (result.error or "")
+
+
+def test_malformed_pr_view_payload_refuses_without_calling_gh(monkeypatch) -> None:
+    """A KeyError inside pr_detail's parser must not escape merge_pr as a
+    traceback — it must surface as the same fail-closed ActionResult as any
+    other GateUnavailable. Exercises the real `pr_detail`, not a stub."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake_gh(
+        path: Path, *args: str, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[:2] == ("pr", "view"):
+            return subprocess.CompletedProcess(list(args), 0, "{}", "")
+        raise AssertionError(f"unexpected gh invocation: {args}")
+
+    monkeypatch.setattr(
+        "github_checker.prgate.repo_slug", lambda path, **kw: ("acme", "widget")
+    )
+    monkeypatch.setattr("github_checker.prgate.run_gh", fake_gh)
+
+    result = merge_pr(Path("/repo"), 7, if_head=HEAD)
+
+    assert result.ok is False
+    assert result.merged is False
+    assert not any(call[:2] == ("pr", "merge") for call in calls)
+
+
+def test_merge_pr_signature_has_no_catch_all_kwargs() -> None:
+    """Pin the parameter list: a future `detail=` parameter would let a
+    caller hand in stale state and reopen the TOCTOU hole this verb exists
+    to close. `**kwargs` in the fixture's stub must not hide that drift."""
+    params = inspect.signature(merge_pr).parameters
+    assert list(params) == ["path", "number", "if_head", "binary"]
+    assert all(p.kind != inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def test_draft_and_stale_head_both_reported_together(patched) -> None:
+    rec = Recorder()
+    patched(make_detail(is_draft=True, head_sha=OTHER), rec)
+    result = merge_pr(Path("/repo"), 7, if_head=HEAD)
+    assert result.ok is False
+    assert result.gate_failed is not None
+    assert "not-draft" in result.gate_failed
+    assert "head-sha" in result.gate_failed
+    assert rec.calls == []

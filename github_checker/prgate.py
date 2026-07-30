@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from github_checker.actions import ActionResult
 from github_checker.ghcli import repo_slug, run_gh
 from github_checker.models import (
@@ -281,10 +283,17 @@ def pr_detail(
     except json.JSONDecodeError as err:
         raise GateUnavailable("unexpected non-JSON from gh pr view") from err
 
-    detail = parse_pr_view(data, file_limit=file_limit)
-    detail.review_threads, detail.threads_truncated = fetch_review_threads(
-        path, owner, name, number, binary=binary
-    )
+    try:
+        # rc 0 with the wrong shape is still "state that cannot be
+        # established" — data["number"], item["path"] and node["id"] index
+        # directly, and a mis-shaped-but-valid-JSON body must close the gate
+        # via GateUnavailable rather than let the raw exception escape the verb
+        detail = parse_pr_view(data, file_limit=file_limit)
+        detail.review_threads, detail.threads_truncated = fetch_review_threads(
+            path, owner, name, number, binary=binary
+        )
+    except (KeyError, TypeError, ValidationError) as err:
+        raise GateUnavailable(f"unexpected PR payload shape: {err!r}") from err
     detail.allows_squash = fetch_allows_squash(path, owner, name, binary=binary)
 
     diff = run_gh(path, "pr", "diff", str(number), binary=binary)
