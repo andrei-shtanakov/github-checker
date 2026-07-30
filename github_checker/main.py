@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import sys
 import tomllib
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -49,14 +50,19 @@ def _run_snapshot(workspace: Path, local_only: bool, indent: int | None) -> None
     print(snapshot.model_dump_json(indent=indent))
 
 
+def _emit(result: "ActionResult") -> None:
+    """Print one JSON ActionResult and honour the exit-code contract."""
+    print(result.model_dump_json(indent=2))
+    if not result.ok:
+        raise SystemExit(1)
+
+
 def _run_action(action: str, directory: Path) -> None:
     """Run a headless whitelist action and print its JSON result."""
     from github_checker.actions import open_pr, pull
 
     result = pull(directory) if action == "pull" else open_pr(directory)
-    print(result.model_dump_json(indent=2))
-    if not result.ok:
-        raise SystemExit(1)
+    _emit(result)
 
 
 def _run_propose(args: argparse.Namespace) -> None:
@@ -70,16 +76,7 @@ def _run_propose(args: argparse.Namespace) -> None:
         if_match_args=args.if_match,
         branch=args.branch,
     )
-    print(result.model_dump_json(indent=2))
-    if not result.ok:
-        raise SystemExit(1)
-
-
-def _emit(result: "ActionResult") -> None:
-    """Print one JSON ActionResult and honour the exit-code contract."""
-    print(result.model_dump_json(indent=2))
-    if not result.ok:
-        raise SystemExit(1)
+    _emit(result)
 
 
 def _run_pr_detail(args: argparse.Namespace) -> None:
@@ -87,12 +84,20 @@ def _run_pr_detail(args: argparse.Namespace) -> None:
     from github_checker import prgate
     from github_checker.actions import ActionResult
 
+    # --file-limit/--diff-lines default to None on the parser so prgate's own
+    # FILE_LIMIT/DIFF_LINE_LIMIT stay the single source of truth for the
+    # numbers; only override them when the caller actually gave a value.
+    file_limit = args.file_limit if args.file_limit is not None else prgate.FILE_LIMIT
+    diff_line_limit = (
+        args.diff_lines if args.diff_lines is not None else prgate.DIFF_LINE_LIMIT
+    )
+
     try:
         detail = prgate.pr_detail(
             args.dir,
             args.pr,
-            file_limit=args.file_limit,
-            diff_line_limit=args.diff_lines,
+            file_limit=file_limit,
+            diff_line_limit=diff_line_limit,
         )
     except prgate.GateUnavailable as err:
         _emit(
@@ -162,8 +167,15 @@ def _dispatch_guarded(
     try:
         handler()
     except SystemExit:
-        raise  # _emit's own ok=False exit — not an unforeseen failure
+        # SystemExit derives from BaseException, not Exception, so the
+        # `except Exception` below would never catch it regardless of
+        # ordering; this clause is not load-bearing, just self-documentation
+        # that _emit's own ok=False exit is meant to propagate untouched.
+        raise
     except Exception as err:
+        # The frame list belongs on stderr, outside the stdout JSON contract:
+        # it keeps the bug locatable without adding a second shape to stdout.
+        traceback.print_exc()
         _emit(
             ActionResult(
                 action=action,
@@ -253,11 +265,20 @@ def main() -> None:
     )
     detail_p.add_argument("dir", type=Path, help="path to the local clone")
     detail_p.add_argument("pr", type=int, help="pull request number")
+    # default=None (not a literal number): prgate.pr_detail()'s own
+    # FILE_LIMIT/DIFF_LINE_LIMIT stay the single source of truth; _run_pr_detail
+    # passes an override through only when the caller actually gave one.
     detail_p.add_argument(
-        "--file-limit", type=int, default=100, help="max files listed (default: 100)"
+        "--file-limit",
+        type=int,
+        default=None,
+        help="max files listed (default: pr_detail's own limit)",
     )
     detail_p.add_argument(
-        "--diff-lines", type=int, default=2000, help="max diff lines (default: 2000)"
+        "--diff-lines",
+        type=int,
+        default=None,
+        help="max diff lines (default: pr_detail's own limit)",
     )
 
     merge_p = sub.add_parser(
@@ -281,9 +302,11 @@ def main() -> None:
     if args.command == "snapshot":
         _run_snapshot(args.workspace, args.local_only, args.indent or None)
     elif args.command in ("pull", "open-pr"):
-        _run_action(args.command, args.dir)
+        _dispatch_guarded(
+            args.command, args.dir, lambda: _run_action(args.command, args.dir)
+        )
     elif args.command == "propose-pr":
-        _run_propose(args)
+        _dispatch_guarded("propose-pr", args.dir, lambda: _run_propose(args))
     elif args.command == "pr-detail":
         _dispatch_guarded("pr-detail", args.dir, lambda: _run_pr_detail(args))
     elif args.command == "merge":

@@ -224,6 +224,10 @@ def test_merge_refusal_strips_the_diff_before_printing(
     assert payload["ok"] is False
     assert payload["gate_failed"] == ["checks"]
     assert payload["pr_detail"]["diff"] is None
+    # The strip must be a copy, not a mutation: the source PrDetail that
+    # prgate.merge_pr() (and anything else holding a reference to it) built
+    # is untouched by what the CLI chooses to print.
+    assert detail.diff is not None
 
 
 def test_unexpected_exception_still_prints_json_not_a_traceback(
@@ -237,7 +241,56 @@ def test_unexpected_exception_still_prints_json_not_a_traceback(
     with pytest.raises(SystemExit) as exit_info:
         main_module.main()
     assert exit_info.value.code == 1
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
     assert payload["ok"] is False
     assert "RuntimeError" in payload["error"]
     assert "boom" in payload["error"]
+    # The frame list still goes to stderr, outside the JSON contract, so a
+    # real bug stays locatable instead of just "some exception happened".
+    assert "Traceback" in captured.err
+    assert "RuntimeError" in captured.err
+
+
+def test_pull_unexpected_exception_still_prints_json_not_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The guard is not special-cased to the three new verbs — pre-existing
+    verbs (pull/open-pr/propose-pr) now share the same "always JSON" contract.
+    """
+
+    def boom(directory: Path) -> None:
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr("github_checker.actions.pull", boom)
+    monkeypatch.setattr("sys.argv", ["github-checker", "pull", "/tmp/repo"])
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+    assert exit_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["action"] == "pull"
+    assert "RuntimeError" in payload["error"]
+
+
+def test_post_merge_sync_wiring_prints_the_result(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from github_checker.actions import ActionResult
+
+    result = ActionResult(
+        action="post-merge-sync",
+        dir="/tmp/repo",
+        ok=True,
+        local_sync="ok",
+        detail="fast-forwarded",
+    )
+    monkeypatch.setattr(
+        "github_checker.actions.post_merge_sync", lambda *a, **k: result
+    )
+    monkeypatch.setattr("sys.argv", ["github-checker", "post-merge-sync", "/tmp/repo"])
+    main_module.main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == "post-merge-sync"
+    assert payload["ok"] is True
+    assert payload["local_sync"] == "ok"
