@@ -153,6 +153,13 @@ class PrDetail(BaseModel):
     allows_squash: bool | None = None
 
 
+class GateResult(BaseModel):
+    """Which merge predicates failed; empty `failed` means the gate is open."""
+
+    passed: bool
+    failed: list[str] = []
+
+
 class RepoState(BaseModel):
     """Everything the TUI shows about one repository."""
 

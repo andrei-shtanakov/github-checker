@@ -13,6 +13,7 @@ from github_checker.ghcli import run_gh
 from github_checker.models import (
     ChangedFile,
     CheckRun,
+    GateResult,
     PrDetail,
     ReviewThread,
 )
@@ -187,3 +188,23 @@ def fetch_review_threads(
         if cursor is None:
             return threads, False
     return threads, True
+
+
+def evaluate_gate(detail: PrDetail) -> GateResult:
+    """Judge a PR against every merge predicate; report all failures at once."""
+    failed: list[str] = []
+    if detail.state != "OPEN":
+        failed.append("open")
+    if detail.is_draft:
+        failed.append("not-draft")
+    if detail.mergeable != "MERGEABLE":
+        failed.append("mergeable")
+    if any(check.state not in _SUCCESSFUL_CHECKS for check in detail.checks):
+        failed.append("checks-green")
+    if detail.review_decision in ("CHANGES_REQUESTED", "REVIEW_REQUIRED"):
+        failed.append("approvals")
+    if any(not thread.is_resolved for thread in detail.review_threads):
+        failed.append("threads-resolved")
+    if detail.allows_squash is not True:
+        failed.append("squash-allowed")
+    return GateResult(passed=not failed, failed=failed)
