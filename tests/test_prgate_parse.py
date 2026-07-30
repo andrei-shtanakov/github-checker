@@ -8,9 +8,11 @@ import pytest
 from github_checker import prgate
 from github_checker.prgate import (
     GateUnavailable,
+    fetch_allows_squash,
     fetch_review_threads,
     parse_pr_view,
     parse_review_threads,
+    pr_detail,
     truncate_diff,
 )
 
@@ -285,3 +287,123 @@ def test_truncate_diff_leaves_small_diffs_alone() -> None:
     out, cut = truncate_diff(text, line_limit=2000, byte_limit=200_000)
     assert out == text
     assert cut is False
+
+
+def _fake_gh_for_pr_detail(*, diff: _FakeProc, squash: _FakeProc, thread_next: bool):
+    """Dispatch `run_gh` calls to canned responses by gh subcommand.
+
+    Mirrors what `pr_detail` actually issues (pr view / api graphql /
+    api repos/... / pr diff) so the wiring between the read verb and its
+    helpers is exercised end to end, not just each helper in isolation.
+    """
+
+    def fake_gh(path: Path, *args: str, **kwargs: object) -> _FakeProc:
+        if args[:2] == ("pr", "view"):
+            return _FakeProc(0, stdout=json.dumps(_view()))
+        if args[:2] == ("api", "graphql"):
+            page = json.dumps(_page([_thread("t", False)], has_next=thread_next))
+            return _FakeProc(0, stdout=page)
+        if len(args) >= 2 and args[0] == "api" and args[1].startswith("repos/"):
+            return squash
+        if args[:2] == ("pr", "diff"):
+            return diff
+        raise AssertionError(f"unexpected gh invocation: {args}")
+
+    return fake_gh
+
+
+def test_pr_detail_wires_threads_and_truncation_flag_together(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # this is the property the whole task pins: evaluate_gate's
+    # threads-complete predicate reads threads_truncated, so it must arrive
+    # attached to the same fetch that produced review_threads, never stale
+    fake_gh = _fake_gh_for_pr_detail(
+        diff=_FakeProc(0, stdout="diff --git a/a.py b/a.py\n"),
+        squash=_FakeProc(0, stdout="true\n"),
+        thread_next=True,  # always claims another page; MAX_THREAD_PAGES caps it
+    )
+    monkeypatch.setattr(prgate, "run_gh", fake_gh)
+    monkeypatch.setattr(prgate, "repo_slug", lambda path, **kw: ("acme", "widget"))
+
+    detail = pr_detail(tmp_path, 7)
+
+    assert detail.threads_truncated is True
+    assert len(detail.review_threads) == prgate.MAX_THREAD_PAGES
+    assert detail.allows_squash is True
+    assert detail.diff == "diff --git a/a.py b/a.py\n"
+    assert detail.diff_truncated is False
+
+
+def test_pr_detail_raises_when_repo_slug_unresolvable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(prgate, "repo_slug", lambda path, **kw: None)
+    with pytest.raises(GateUnavailable, match="repo"):
+        pr_detail(tmp_path, 7)
+
+
+def test_pr_detail_raises_when_gh_pr_view_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(prgate, "repo_slug", lambda path, **kw: ("acme", "widget"))
+    monkeypatch.setattr(
+        prgate, "run_gh", lambda path, *a, **kw: _FakeProc(1, stderr="boom")
+    )
+    with pytest.raises(GateUnavailable, match="boom"):
+        pr_detail(tmp_path, 7)
+
+
+def test_pr_detail_raises_on_non_json_pr_view_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(prgate, "repo_slug", lambda path, **kw: ("acme", "widget"))
+    monkeypatch.setattr(
+        prgate, "run_gh", lambda path, *a, **kw: _FakeProc(0, stdout="not json")
+    )
+    with pytest.raises(GateUnavailable, match="non-JSON"):
+        pr_detail(tmp_path, 7)
+
+
+def test_pr_detail_diff_fetch_is_best_effort(tmp_path: Path, monkeypatch) -> None:
+    # a failed `gh pr diff` degrades the display only — it must not raise
+    fake_gh = _fake_gh_for_pr_detail(
+        diff=_FakeProc(1, stderr="diff unavailable"),
+        squash=_FakeProc(0, stdout="true\n"),
+        thread_next=False,
+    )
+    monkeypatch.setattr(prgate, "run_gh", fake_gh)
+    monkeypatch.setattr(prgate, "repo_slug", lambda path, **kw: ("acme", "widget"))
+
+    detail = pr_detail(tmp_path, 7)
+
+    assert detail.diff is None
+    assert detail.diff_truncated is False
+
+
+def test_fetch_allows_squash_true_on_true_stdout(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        prgate, "run_gh", lambda path, *a, **kw: _FakeProc(0, stdout="true\n")
+    )
+    assert fetch_allows_squash(tmp_path, "acme", "widget") is True
+
+
+def test_fetch_allows_squash_false_on_false_stdout(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        prgate, "run_gh", lambda path, *a, **kw: _FakeProc(0, stdout="false\n")
+    )
+    assert fetch_allows_squash(tmp_path, "acme", "widget") is False
+
+
+def test_fetch_allows_squash_none_on_failure_or_unparseable_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # "could not determine" must stay distinct from "squash is allowed" —
+    # evaluate_gate's squash-allowed predicate blocks on anything but True
+    monkeypatch.setattr(
+        prgate, "run_gh", lambda path, *a, **kw: _FakeProc(1, stderr="boom")
+    )
+    assert fetch_allows_squash(tmp_path, "acme", "widget") is None
+
+    monkeypatch.setattr(
+        prgate, "run_gh", lambda path, *a, **kw: _FakeProc(0, stdout="null\n")
+    )
+    assert fetch_allows_squash(tmp_path, "acme", "widget") is None
