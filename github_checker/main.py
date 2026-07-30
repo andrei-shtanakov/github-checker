@@ -92,6 +92,30 @@ def _run_pr_detail(args: argparse.Namespace) -> None:
         args.diff_lines if args.diff_lines is not None else prgate.DIFF_LINE_LIMIT
     )
 
+    # Not argparse `type=`/`choices=` validation: argparse would exit(2) with
+    # a usage message on stderr, breaking the "exactly one JSON ActionResult
+    # on stdout" contract (see the --if-match comment on the propose-pr
+    # parser). A value below 1 isn't just out of range, it silently does the
+    # wrong thing: `list[:-5]` drops the last 5 items instead of limiting to
+    # a count, and inside truncate_diff `len(lines) > -5` is always true, so
+    # diff_truncated would be reported regardless of what was actually cut.
+    # 0 is rejected too — a zero-file listing or zero-line diff conveys
+    # nothing, so it's as meaningless as a negative value here.
+    for flag, value in (
+        ("--file-limit", file_limit),
+        ("--diff-lines", diff_line_limit),
+    ):
+        if value < 1:
+            _emit(
+                ActionResult(
+                    action="pr-detail",
+                    dir=str(args.dir),
+                    ok=False,
+                    error=f"{flag} must be >= 1, got {value}",
+                )
+            )
+            return
+
     try:
         detail = prgate.pr_detail(
             args.dir,
@@ -123,6 +147,10 @@ def _run_merge(args: argparse.Namespace) -> None:
                 dir=str(args.dir),
                 ok=False,
                 merged=False,
+                # Every other merge refusal goes through prgate._merge_failure,
+                # which sets this; matching it here means a JSON consumer never
+                # has to branch on a null it could otherwise treat as known.
+                local_sync="not_attempted",
                 error="--if-head is required",
             )
         )

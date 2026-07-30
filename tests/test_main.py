@@ -143,6 +143,30 @@ def test_merge_without_if_head_returns_json_not_a_usage_error(
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
     assert "--if-head" in payload["error"]
+    # Every other merge refusal goes through prgate._merge_failure, which
+    # sets this; this path must match so a JSON consumer never has to treat
+    # a null local_sync as a special case.
+    assert payload["local_sync"] == "not_attempted"
+
+
+@pytest.mark.parametrize("flag", ["--file-limit", "--diff-lines"])
+@pytest.mark.parametrize("value", ["-5", "0"])
+def test_pr_detail_rejects_non_positive_limits(
+    flag: str,
+    value: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["github-checker", "pr-detail", "/tmp/repo", "7", flag, value],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+    assert exit_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert flag in payload["error"]
 
 
 def test_pr_detail_prints_the_detail_and_exits_zero(
