@@ -5,12 +5,16 @@ re-reads state and re-evaluates every predicate immediately before merging.
 A caller must never be able to widen the gate by passing a stale payload.
 """
 
+import json
+from pathlib import Path
 from typing import Any
 
+from github_checker.ghcli import run_gh
 from github_checker.models import (
     ChangedFile,
     CheckRun,
     PrDetail,
+    ReviewThread,
 )
 
 PR_VIEW_FIELDS = (
@@ -68,3 +72,95 @@ def parse_pr_view(data: dict[str, Any], *, file_limit: int) -> PrDetail:
         files_total=total,
         files_truncated=len(raw_files) > file_limit or total > len(files),
     )
+
+
+class GateUnavailable(Exception):
+    """PR state could not be established; the gate must stay closed."""
+
+
+THREAD_PAGE_SIZE = 100
+MAX_THREAD_PAGES = 5
+_EXCERPT_CHARS = 280
+
+_THREADS_QUERY = (
+    """
+query($owner:String!,$name:String!,$number:Int!,$cursor:String){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$number){
+      reviewThreads(first:%d, after:$cursor){
+        pageInfo{ hasNextPage endCursor }
+        nodes{
+          id isResolved isOutdated path
+          comments(first:1){ nodes{ author{ login } body } }
+        }
+      }
+    }
+  }
+}
+"""
+    % THREAD_PAGE_SIZE
+)
+
+
+def parse_review_threads(page: dict[str, Any]) -> tuple[list[ReviewThread], str | None]:
+    """Map one GraphQL page to threads plus the next cursor (None if last)."""
+    connection = (
+        page.get("data", {})
+        .get("repository", {})
+        .get("pullRequest", {})
+        .get("reviewThreads", {})
+    )
+    threads: list[ReviewThread] = []
+    for node in connection.get("nodes") or []:
+        comments = (node.get("comments") or {}).get("nodes") or []
+        first = comments[0] if comments else {}
+        body = first.get("body")
+        threads.append(
+            ReviewThread(
+                id=node["id"],
+                is_resolved=bool(node.get("isResolved")),
+                is_outdated=bool(node.get("isOutdated")),
+                path=node.get("path"),
+                author=(first.get("author") or {}).get("login"),
+                excerpt=body[:_EXCERPT_CHARS] if body else None,
+            )
+        )
+    info = connection.get("pageInfo") or {}
+    cursor = info.get("endCursor") if info.get("hasNextPage") else None
+    return threads, cursor
+
+
+def fetch_review_threads(
+    path: Path, owner: str, name: str, number: int, *, binary: str = "gh"
+) -> tuple[list[ReviewThread], bool]:
+    """All review threads of a PR; the flag means the page cap cut the list."""
+    threads: list[ReviewThread] = []
+    cursor: str | None = None
+    for _ in range(MAX_THREAD_PAGES):
+        args = [
+            "api",
+            "graphql",
+            "-f",
+            f"query={_THREADS_QUERY}",
+            "-F",
+            f"owner={owner}",
+            "-F",
+            f"name={name}",
+            "-F",
+            f"number={number}",
+        ]
+        if cursor is not None:
+            args += ["-F", f"cursor={cursor}"]
+        proc = run_gh(path, *args, binary=binary)
+        if proc.returncode != 0:
+            # неизвестное состояние тредов = закрытые ворота, а не пустой список
+            raise GateUnavailable(proc.stderr.strip() or "gh api graphql failed")
+        try:
+            page = json.loads(proc.stdout)
+        except json.JSONDecodeError as err:
+            raise GateUnavailable("unexpected non-JSON from gh api graphql") from err
+        batch, cursor = parse_review_threads(page)
+        threads.extend(batch)
+        if cursor is None:
+            return threads, False
+    return threads, True
