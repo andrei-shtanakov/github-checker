@@ -11,6 +11,7 @@ from github_checker.prgate import (
     fetch_review_threads,
     parse_pr_view,
     parse_review_threads,
+    truncate_diff,
 )
 
 
@@ -263,3 +264,24 @@ def test_fetch_threads_flags_truncation_when_page_cap_hit(
     threads, truncated = fetch_review_threads(tmp_path, "acme", "widget", 7)
     assert truncated is True
     assert len(threads) == prgate.MAX_THREAD_PAGES
+
+
+def test_truncate_diff_cuts_by_line_count() -> None:
+    text = "\n".join(f"line {i}" for i in range(500))
+    out, cut = truncate_diff(text, line_limit=100, byte_limit=10**9)
+    assert cut is True
+    assert len(out.splitlines()) == 100
+
+
+def test_truncate_diff_cuts_by_byte_budget() -> None:
+    text = "\n".join("x" * 100 for _ in range(500))
+    out, cut = truncate_diff(text, line_limit=10**9, byte_limit=1000)
+    assert cut is True
+    assert len(out.encode()) <= 1000
+
+
+def test_truncate_diff_leaves_small_diffs_alone() -> None:
+    text = "diff --git a/a.py b/a.py\n+one line\n"
+    out, cut = truncate_diff(text, line_limit=2000, byte_limit=200_000)
+    assert out == text
+    assert cut is False

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from github_checker.ghcli import run_gh
+from github_checker.ghcli import repo_slug, run_gh
 from github_checker.models import (
     ChangedFile,
     CheckRun,
@@ -213,3 +213,82 @@ def evaluate_gate(detail: PrDetail) -> GateResult:
     if detail.allows_squash is not True:
         failed.append("squash-allowed")
     return GateResult(passed=not failed, failed=failed)
+
+
+FILE_LIMIT = 100
+DIFF_LINE_LIMIT = 2000
+DIFF_BYTE_LIMIT = 200_000
+
+
+def truncate_diff(text: str, *, line_limit: int, byte_limit: int) -> tuple[str, bool]:
+    """Cut a diff at whichever budget binds first; report whether it was cut."""
+    lines = text.splitlines(keepends=True)
+    cut = len(lines) > line_limit
+    kept = lines[:line_limit]
+    out = "".join(kept)
+    encoded = out.encode()
+    if len(encoded) > byte_limit:
+        out = encoded[:byte_limit].decode(errors="ignore")
+        cut = True
+    return out, cut
+
+
+def fetch_allows_squash(
+    path: Path, owner: str, name: str, *, binary: str = "gh"
+) -> bool | None:
+    """Whether branch protection/settings permit a squash merge; None if unknown."""
+    proc = run_gh(
+        path,
+        "api",
+        f"repos/{owner}/{name}",
+        "--jq",
+        ".allow_squash_merge",
+        binary=binary,
+    )
+    if proc.returncode != 0:
+        return None
+    answer = proc.stdout.strip()
+    if answer == "true":
+        return True
+    if answer == "false":
+        return False
+    return None
+
+
+def pr_detail(
+    path: Path,
+    number: int,
+    *,
+    file_limit: int = FILE_LIMIT,
+    diff_line_limit: int = DIFF_LINE_LIMIT,
+    diff_byte_limit: int = DIFF_BYTE_LIMIT,
+    binary: str = "gh",
+) -> PrDetail:
+    """Read one pull request: state, checks, files, diff and review threads."""
+    slug = repo_slug(path, binary=binary)
+    if slug is None:
+        raise GateUnavailable("cannot resolve owner/repo for this clone")
+    owner, name = slug
+
+    view = run_gh(
+        path, "pr", "view", str(number), "--json", PR_VIEW_FIELDS, binary=binary
+    )
+    if view.returncode != 0:
+        raise GateUnavailable(view.stderr.strip() or "gh pr view failed")
+    try:
+        data = json.loads(view.stdout)
+    except json.JSONDecodeError as err:
+        raise GateUnavailable("unexpected non-JSON from gh pr view") from err
+
+    detail = parse_pr_view(data, file_limit=file_limit)
+    detail.review_threads, detail.threads_truncated = fetch_review_threads(
+        path, owner, name, number, binary=binary
+    )
+    detail.allows_squash = fetch_allows_squash(path, owner, name, binary=binary)
+
+    diff = run_gh(path, "pr", "diff", str(number), binary=binary)
+    if diff.returncode == 0:
+        detail.diff, detail.diff_truncated = truncate_diff(
+            diff.stdout, line_limit=diff_line_limit, byte_limit=diff_byte_limit
+        )
+    return detail
