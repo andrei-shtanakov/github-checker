@@ -52,6 +52,58 @@ side-effect. Выход — JSON `ActionResult`, exit 1 при неуспехе.
 никогда не пушит в сам дефолтный бренч, файлы в живом working tree
 вызывающего не читаются как источник контента и не изменяются.
 
+### Merge-gate-глаголы
+
+    uv run github-checker pr-detail <dir> <pr>              # прочитать PR: состояние, чеки, диф
+    uv run github-checker merge <dir> <pr> --if-head <sha>  # squash-merge за воротами гейта
+    uv run github-checker post-merge-sync <dir>             # дефолт-бренч, ff-pull, прунинг
+
+`pr-detail` — это *view*: `gh pr view` + review-треды по GraphQL (до
+`MAX_THREAD_PAGES=5` страниц по `THREAD_PAGE_SIZE=100`) + `gh pr diff`, сведённые
+в один `PrDetail`. `merge` — независимая точка проверки: перед мержем он сам
+заново читает PR через `pr_detail()` и заново вычисляет все восемь предикатов
+гейта — `open`, `not-draft`, `mergeable`, `checks-green`, `approvals`,
+`threads-resolved`, `threads-complete`, `squash-allowed` — плюс собственную
+проверку `--if-head` (расхождение с текущим `headRefOid` PR — тоже отказ).
+Устаревший или подменённый payload не может открыть ворота: гейт всегда судит
+свежее состояние, а не то, что видел вызывающий.
+
+`approvals` — allowlist, не blocklist: проходит только `reviewDecision = None`
+(ревью не требуется репозиторием) или `APPROVED`; любое другое значение —
+включая ещё не описанное будущее значение GitHub'овского enum — блокирует.
+`threads-complete` — восьмой предикат: если постраничное чтение тредов было
+оборвано лимитом страниц, это тоже отказ, потому что усечённый список нельзя
+путать с «открытых тредов нет». `mergeable = UNKNOWN` тоже блокирует — предикат
+`mergeable` требует ровно значения `MERGEABLE`.
+
+Отказ гейта возвращает `pr_detail` целиком (чеки, треды, `gate_failed`) для
+диагностики, но перед печатью в CLI из него стирается `diff` — отказ отвечает
+на «почему», а не раздаёт содержимое PR повторно; за самим диффом — `pr-detail`.
+Это только печать в `main.py`: `merge_pr()` как библиотечная функция по-прежнему
+возвращает `PrDetail` целиком, включая `diff`.
+
+`post-merge-sync` не разрушает ничего: грязное дерево (включая untracked),
+detached HEAD, отсутствующий upstream, нерешаемый дефолтный бренч и дефолтный
+бренч, занятый другим worktree, — всё это отказы; ни stash, ни reset, ни
+force-switch, ни force-delete не используются. Смерженные локальные ветки
+удаляются `git branch -d` (никогда `-D`). Если локального клона нет вовсе —
+результат `ok=true, local_sync="not_applicable"` (удалённый мерж уже состоялся,
+это не ошибка). Если список смерженных веток прочитать не удалось — синк всё
+равно репортит успех с пометкой в `detail`: сама синхронизация уже прошла,
+чистка веток к её контракту не относится.
+
+Все шесть headless-глаголов (`pull`, `open-pr`, `propose-pr`, `pr-detail`,
+`merge`, `post-merge-sync`) печатают ровно один JSON `ActionResult` и выходят
+с кодом 1 при `ok=false`; непойманное исключение превращается в
+`ActionResult(ok=false)` вместо traceback'а на stdout — сам traceback уходит в
+stderr. `snapshot` и интерактивный TUI в этот контракт не входят — они
+`ActionResult` не печатают.
+
+Большие PR усекаются явно, не молча: `files_truncated`, `diff_truncated` и
+`threads_truncated` в payload. На гейт влияет только `threads_truncated`
+(через предикат `threads-complete`) — `files_truncated`/`diff_truncated`
+только для отображения.
+
 ### Snapshot-контракт v1 (заморожен)
 
 Форма snapshot-JSON — версионируемый контракт: `contracts/snapshot/v1/`
