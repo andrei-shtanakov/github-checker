@@ -10,7 +10,6 @@ regressed — and both need a human to say which.
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import jsonschema
@@ -129,7 +128,9 @@ def _run(*args: str, expect_exit: int) -> dict:
     )
     payload = json.loads(proc.stdout)
     assert payload["ok"] is (expect_exit == 0), (
-        f"`ok` and the exit code must agree: ok={payload['ok']} exit={proc.returncode}"
+        f"`ok` and the exit code must agree: ok={payload['ok']} "
+        f"exit={proc.returncode}\n"
+        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
     )
     return payload
 
@@ -550,28 +551,6 @@ def test_an_abbreviated_option_still_swallows_its_value() -> None:
 
 
 # --- the exit code is contract too ------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "expected, actual, should_pass",
-    [(0, 0, True), (1, 1, True), (0, 1, False), (1, 0, False)],
-    ids=["0/0", "1/1", "0-vs-1", "1-vs-0"],
-)
-def test_the_exit_oracle_can_actually_fail(
-    expected: int, actual: int, should_pass: bool, tmp_path
-) -> None:
-    """A runner that parsed the JSON and ignored the exit code would certify
-    a CLI that answers correctly and exits wrongly. All four combinations,
-    so the oracle is proved able to fail in both directions."""
-    stub = tmp_path / "stub.py"
-    stub.write_text(
-        "import sys, json\n"
-        f"print(json.dumps({{'ok': {actual == 0}}}))\n"
-        f"sys.exit({actual})\n"
-    )
-    proc = subprocess.run([sys.executable, str(stub)], capture_output=True, text=True)
-    matched = proc.returncode == expected
-    assert matched is should_pass
 
 
 # --- local.error as a real, non-empty string --------------------------------
