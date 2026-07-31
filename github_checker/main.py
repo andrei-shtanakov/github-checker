@@ -93,6 +93,10 @@ def _emit_contract_error(
             f"contract violation: {result.action} did not match its "
             f"contracted shape; missing={sorted(expected - got)} "
             f"foreign={sorted(got - expected)}"
+            # the original diagnosis rides along: without it, drift on a
+            # failing verb destroys the reason the verb failed, and the
+            # operator is told about our bug instead of about theirs
+            + (f"; original error: {result.error}" if result.error else "")
         ),
     }
     try:
@@ -120,9 +124,9 @@ def _emit(result: "ActionResult", *, pre_dispatch: bool = False) -> None:
     """
     import json
 
-    from github_checker.actions import contracted_keys
+    from github_checker.actions import contracted_keys, envelope_dump
 
-    payload = result.model_dump(mode="json", exclude_unset=True)
+    payload = envelope_dump(result)
     expected = contracted_keys(result.action)
     if pre_dispatch:
         expected = PRE_DISPATCH_REFUSAL

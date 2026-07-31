@@ -148,6 +148,25 @@ def wire_fields(action: str) -> frozenset[str]:
     return ACTION_FIELDS.get(action, frozenset({"error"}))
 
 
+def envelope_dump(result: ActionResult) -> dict[str, object]:
+    """Serialise the envelope with `exclude_unset`, nested payloads in full.
+
+    `exclude_unset` is what makes an absent field mean "this verb has no
+    such concept" — but it recurses, and a nested payload has no such
+    notion: `PrDetail` built without an optional argument loses 12 of its
+    21 keys, including `diff_truncated`, which the schema requires. The
+    envelope's shape is per-action; a payload's shape is fixed.
+    """
+    payload = result.model_dump(mode="json", exclude_unset=True)
+    for name in list(payload):
+        value = getattr(result, name, None)
+        if isinstance(value, BaseModel):
+            payload[name] = value.model_dump(mode="json")
+        elif isinstance(value, list) and value and isinstance(value[0], BaseModel):
+            payload[name] = [item.model_dump(mode="json") for item in value]
+    return payload
+
+
 def contracted_keys(action: str) -> set[str]:
     """The exact JSON key set this action must serialise to."""
     return set(ENVELOPE_FIELDS) | wire_fields(action)
@@ -209,9 +228,7 @@ def open_pr(path: Path) -> ActionResult:
     failing. Never pushes — an unpushed branch is an error, not a side effect.
     """
     if not is_git_repo(path):
-        return ActionResult(
-            action="open-pr", dir=str(path), ok=False, error="not a git repository"
-        )
+        return result_for("open-pr", path, ok=False, error="not a git repository")
 
     view = run_gh(path, "pr", "view", "--json", "url,state")
     if view.returncode == 0:
@@ -220,16 +237,16 @@ def open_pr(path: Path) -> ActionResult:
         except json.JSONDecodeError:
             # успешный exit с мусором в stdout: создавать PR вслепую нельзя —
             # риск дубля; честная ошибка вместо догадки
-            return ActionResult(
-                action="open-pr",
-                dir=str(path),
+            return result_for(
+                "open-pr",
+                path,
                 ok=False,
                 error="unexpected non-JSON output from `gh pr view`",
             )
         if data.get("state") == "OPEN":
-            return ActionResult(
-                action="open-pr",
-                dir=str(path),
+            return result_for(
+                "open-pr",
+                path,
                 ok=True,
                 detail="pull request already open",
                 pr_url=data.get("url"),
@@ -238,23 +255,23 @@ def open_pr(path: Path) -> ActionResult:
 
     created = run_gh(path, "pr", "create", "--fill")
     if created.returncode != 0:
-        return ActionResult(
-            action="open-pr",
-            dir=str(path),
+        return result_for(
+            "open-pr",
+            path,
             ok=False,
             error=created.stderr.strip() or "gh pr create failed",
         )
     url = created.stdout.strip().splitlines()[-1] if created.stdout.strip() else None
     if not url:
-        return ActionResult(
-            action="open-pr",
-            dir=str(path),
+        return result_for(
+            "open-pr",
+            path,
             ok=False,
             error="`gh pr create` succeeded but returned no PR URL",
         )
-    return ActionResult(
-        action="open-pr",
-        dir=str(path),
+    return result_for(
+        "open-pr",
+        path,
         ok=True,
         detail="pull request created",
         pr_url=url,

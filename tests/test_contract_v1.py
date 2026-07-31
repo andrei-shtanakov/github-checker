@@ -135,3 +135,73 @@ def test_an_unknown_verb_is_a_cli_error_not_an_action() -> None:
     assert payload["result_kind"] == "cli_error"
     assert payload["action"] == "no-such-verb", "diagnostic only"
     VALIDATOR.validate(payload)
+
+
+# --- every verb through the real binary -------------------------------------
+#
+# The gap that hid a broken `open-pr`: the wire-shape tests build results with
+# `result_for`, which production did not use there, and the model-level tests
+# never look at the wire. Only driving each verb for real closes it.
+REAL_INVOCATIONS = [
+    ("pull", ["pull", "/tmp"]),
+    ("open-pr", ["open-pr", "/tmp"]),
+    ("propose-pr", ["propose-pr", "/tmp", "--message", "x", "--edit", "a=b"]),
+    ("pr-detail", ["pr-detail", "/tmp", "1"]),
+    ("merge", ["merge", "/tmp", "1", "--if-head", "abc"]),
+    ("post-merge-sync", ["post-merge-sync", "/tmp"]),
+    ("issue-lookup", ["issue-lookup", "/tmp", "--slug", "wanted"]),
+    (
+        "issue-create",
+        [
+            "issue-create",
+            "/tmp",
+            "--slug",
+            "w",
+            "--from",
+            "d",
+            "--title",
+            "t",
+            "--body-file",
+            "/etc/hostname",
+        ],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "verb, argv", REAL_INVOCATIONS, ids=[v for v, _ in REAL_INVOCATIONS]
+)
+def test_every_verb_ships_a_payload_the_schema_accepts(
+    verb: str, argv: list[str]
+) -> None:
+    payload = _run(*argv)
+    assert payload["result_kind"] == "action", (
+        f"{verb} did not ship an action result: {payload.get('error')}"
+    )
+    assert payload["action"] == verb
+    VALIDATOR.validate(payload)
+
+
+def test_a_nested_payload_keeps_its_whole_shape() -> None:
+    """`exclude_unset` recurses, and a nested model has no per-action shape:
+    a PrDetail built without optional arguments loses 12 of its 21 keys,
+    `diff_truncated` among them, which the schema requires."""
+    from github_checker.actions import envelope_dump, result_for
+    from github_checker.models import PrDetail
+
+    detail = PrDetail(
+        number=1,
+        title="t",
+        url="u",
+        state="OPEN",
+        is_draft=False,
+        mergeable="MERGEABLE",
+        head_branch="b",
+        head_sha="s",
+        base_branch="m",
+    )
+    wire = envelope_dump(result_for("pr-detail", "/repo", ok=True, pr_detail=detail))
+    nested = wire["pr_detail"]
+    assert isinstance(nested, dict)
+    assert set(nested) == set(detail.model_dump())
+    VALIDATOR.validate(wire)
