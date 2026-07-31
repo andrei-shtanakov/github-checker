@@ -222,7 +222,14 @@ def _run_issue_create(args: argparse.Namespace) -> None:
             return
     try:
         prose = Path(args.body_file).read_text()
-    except OSError as err:
+    except (OSError, UnicodeDecodeError) as err:
+        # UnicodeDecodeError is a ValueError, not an OSError, so it must be
+        # caught here explicitly: this read happens before any mutation, so
+        # the truthful `created` is False (nothing attempted), not the
+        # `_dispatch_guarded` catch-all's None ("transport broke mid-call,
+        # may have landed") — that distinction is the whole point of the
+        # three-valued `created` contract, and only the site of the read
+        # knows which one it is.
         refuse(f"cannot read --body-file: {err}")
         return
     _emit(

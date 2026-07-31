@@ -41,9 +41,14 @@ def slug_lines(body: str) -> list[str]:
     D3). Scanning only it is what keeps a `slug:` written inside the prose
     from being read as identity. The count is meaningful to the caller:
     two claims are malformed, not a first-wins choice.
+
+    No CRLF-to-LF normalisation before the split: it would be dead code.
+    `\\r` left dangling at the end of a `\\n`-split line is whitespace, so
+    it is already absorbed by `_SLUG_LINE_RE`'s trailing `\\s*` on a slug
+    line, and by `str.strip()` on the blank-line check.
     """
     values: list[str] = []
-    for raw in body.replace("\r\n", "\n").split("\n"):
+    for raw in body.split("\n"):
         if not raw.strip():
             break
         match = _SLUG_LINE_RE.match(raw)

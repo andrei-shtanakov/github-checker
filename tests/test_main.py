@@ -369,7 +369,47 @@ def test_issue_create_with_a_missing_body_file_returns_json(
     with pytest.raises(SystemExit) as exit_info:
         main_module.main()
     assert exit_info.value.code == 1
-    assert json.loads(capsys.readouterr().out)["ok"] is False
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    # Nothing was attempted — this must read as the known-negative `false`,
+    # not the `_dispatch_guarded` catch-all's `null` ("may have landed").
+    assert payload["created"] is False
+
+
+def test_issue_create_with_a_non_utf8_body_file_reports_created_false(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """A `--body-file` that fails to decode is a read failure before any
+    mutation, so `created` must be the known-negative `false`. Before the
+    fix this escaped `_run_issue_create`'s `except OSError` (UnicodeDecodeError
+    is a ValueError, not an OSError), reached `_dispatch_guarded`'s
+    catch-all, and reported `created: null` — a request that was never
+    filed would then read as "may have landed", making it un-retriable.
+    """
+    body = tmp_path / "prose.bin"
+    body.write_bytes(b"\xff\xfe\x00bad-utf8")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "github-checker",
+            "issue-create",
+            "/tmp/repo",
+            "--slug",
+            "wanted",
+            "--from",
+            "dispatcher",
+            "--title",
+            "t",
+            "--body-file",
+            str(body),
+        ],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+    assert exit_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["created"] is False
 
 
 def test_issue_lookup_prints_matches(monkeypatch, capsys) -> None:

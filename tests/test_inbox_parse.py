@@ -85,7 +85,14 @@ def test_slug_lines_handles_a_body_with_no_blank_line() -> None:
     assert slug_lines("slug: only\nfrom: dispatcher\n") == ["only"]
 
 
-def test_slug_lines_tolerates_crlf_and_surrounding_space() -> None:
+def test_slug_lines_tolerates_crlf_via_the_whitespace_class() -> None:
+    """CRLF tolerance comes from `\\s*` in the line regex and `str.strip()`
+    for blank-line detection — both already absorb a trailing `\\r` left
+    over from a plain `\\n` split. There is deliberately no explicit
+    CRLF-to-LF normalisation step in `slug_lines`: it would be provably
+    redundant given this mechanism (confirmed by running this exact input
+    through the function with such a step removed and comparing output).
+    """
     assert slug_lines("  slug:   spaced  \r\nfrom: dispatcher\r\n\r\nprose") == [
         "spaced"
     ]

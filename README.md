@@ -124,20 +124,28 @@ stderr. `snapshot` и интерактивный TUI в этот контрак�
 These work on **inbox issues** (ADR-ECO-006): an issue labelled `inbox` whose
 body opens with a structural block of `slug:` and `from:`, then prose.
 
-`issue-lookup` searches **this repo only** — an identical slug in a sibling
-repo is a different request — in **all states**, since a closed request still
-means the conversation happened. There is no `--state all` flag: `gh search
-issues --state` only accepts `open`/`closed` and rejects `all` outright, so
-omitting `--state` entirely is what covers both. GitHub search only narrows:
-every candidate is confirmed by an exact parse of the structural block, so
-`benchmark-2` never matches `benchmark-20`. It returns two lists: `matches`
-and `malformed`. An issue carrying more than one `slug:` line lands in
+`issue-lookup` reads **this repo only** — an identical slug in a sibling
+repo is a different request — via `gh issue list --state all`, in **all
+states**, since a closed request still means the conversation happened.
+This is `gh issue list`, not `gh search issues`: the search index paginates
+with no exhaustive mode and can lag behind a just-created issue (this
+matters because `issue-create` reads back immediately after creating),
+while `gh issue list` hits the API directly, is natively `--repo`-scoped,
+and takes a real `--state all` (`gh search issues --state` only accepts
+`open`/`closed` and rejects `all` outright). There is no free-text search
+term: every `inbox`-labelled issue in the repo is read, and every candidate
+is confirmed by an exact parse of the structural block, so `benchmark-2`
+never matches `benchmark-20`. It returns two lists: `matches` and
+`malformed`. An issue carrying more than one `slug:` line lands in
 `malformed` with `ok=false` — that is an anomaly for a human, not a
-first-wins choice. A search payload `gh` returns in a shape the lookup does
-not recognize (not a list, an item missing `number`, and the like) is also a
-failed result rather than a raised exception — the same fail-closed
+first-wins choice. A payload `gh` returns in a shape the lookup does not
+recognize (not a list, an item missing `number` or `body`, and the like) is
+also a failed result rather than a raised exception — the same fail-closed
 guarantee, applied to malformed input from the tool itself, not just to
-malformed issue bodies.
+malformed issue bodies. `--limit` is generous but real: hitting it exactly
+is treated as possibly-truncated and fails closed rather than returning a
+partial `matches` (the same idiom as `pr-detail`'s `checks_truncated` /
+`threads_truncated`).
 
 Several matches is **not** an error from this verb; it is a fact the caller
 judges.
@@ -146,17 +154,29 @@ judges.
 supply prose, it writes `slug:` and `from:` — so a submitted form cannot forge
 them. `--from` is validated before any network call: a value containing CR/LF
 would otherwise append lines to the structural block, a second `slug:`
-included. It re-checks for an existing match immediately before creating.
+included. It re-checks for an existing match immediately before creating. If
+that pre-check finds **several** existing claimants, `issue-create` does not
+silently pick one: it refuses (`ok=false, created=false`) with all of them in
+`matches`, for the caller to judge — the same rule `issue-lookup` documents
+for itself.
 
 `created` is three-valued and the values are not interchangeable: `true` the
 create definitively succeeded; `false` definitively not created on this
-attempt (the slug was taken, or a refusal happened before any mutation);
-`null` **unknown** — the transport broke during the call, so it may or may
-not have landed. A caller must never render `null` as "not created": the
-safe follow-up is to look again, never to create again.
+attempt (the slug was taken, several claimants already existed, or a refusal
+happened before any mutation — including a `--body-file` that failed to
+decode); `null` **unknown** — the transport broke during the call itself, so
+it may or may not have landed. A caller must never render `null` as "not
+created": the safe follow-up is to look again, never to create again.
 
-Losing a race is a normal outcome: if the pre-create check finds an existing
-issue, the result is `created=false, ok=true` with that issue attached.
+Losing a race is a normal outcome: if the pre-create check finds exactly one
+existing issue, the result is `created=false, ok=true` with that issue
+attached. After a successful create, the read-back that fills in `issue` is
+diagnostic only — `created` is already final — and its own failure modes are
+distinguished rather than collapsed into one message: reading it back
+outright failed, reading it back succeeded but found nothing yet, reading it
+back found a malformed claimant, or reading it back found more than one
+match are each a different `detail`, all with `issue=null` except the plain
+success case.
 
 ### Snapshot-контракт v1 (заморожен)
 
