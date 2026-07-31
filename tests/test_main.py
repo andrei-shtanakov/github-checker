@@ -442,3 +442,46 @@ def test_issue_lookup_prints_matches(monkeypatch, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["matches"][0]["number"] == 7
+
+
+def test_body_file_is_decoded_as_utf8_not_the_locale(monkeypatch, tmp_path) -> None:
+    """The non-UTF-8 refusal must behave identically on every machine.
+
+    A locale-dependent decode cannot be observed on a UTF-8 host, so this
+    pins the call site rather than the outcome: `read_text` must be given
+    an explicit encoding.
+    """
+    seen: dict = {}
+    real = Path.read_text
+
+    def spy(self, *args, **kwargs):
+        seen.update(kwargs)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", spy)
+    body = tmp_path / "prose.md"
+    body.write_text("prose", encoding="utf-8")
+    monkeypatch.setattr(
+        "github_checker.issues.issue_create",
+        lambda *a, **k: __import__(
+            "github_checker.actions", fromlist=["ActionResult"]
+        ).ActionResult(action="issue-create", dir="/repo", ok=True, created=True),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "github-checker",
+            "issue-create",
+            "/tmp/repo",
+            "--slug",
+            "wanted",
+            "--from",
+            "dispatcher",
+            "--title",
+            "t",
+            "--body-file",
+            str(body),
+        ],
+    )
+    main_module.main()
+    assert seen.get("encoding") == "utf-8"

@@ -60,10 +60,13 @@ def _partition(candidates: Any, slug: str) -> tuple[list[IssueRef], list[IssueRe
 
     Raises `AttributeError`/`KeyError`/`TypeError`/`ValidationError` on any
     shape `gh` did not promise — a top-level object or scalar instead of a
-    list, a `null` item, a candidate missing `number` or `body`, a `labels`
-    entry missing `name`, or a `number` pydantic cannot coerce to `int`. The
-    caller turns all of those into one failed `ActionResult`: a payload we
-    cannot map is a search we could not read, not an empty one.
+    list, a `null` item, or a candidate missing `body`. For an item whose
+    block *does* claim our slug, mapping it raises further on a missing
+    `number`, a `labels` entry missing `name`, or a `number` pydantic
+    cannot coerce to `int`; an item that claims a different slug is never
+    mapped, so those fields are not read and cannot raise. The caller turns
+    all of it into one failed `ActionResult`: a payload we cannot map is a
+    search we could not read, not an empty one.
 
     `body` is indexed directly (`item["body"]`), not defaulted to `""`: it
     is the field identity is read from, the same as `number`. A candidate

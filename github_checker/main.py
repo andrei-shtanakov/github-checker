@@ -221,7 +221,10 @@ def _run_issue_create(args: argparse.Namespace) -> None:
             refuse(f"{flag} is required")
             return
     try:
-        prose = Path(args.body_file).read_text()
+        # encoding pinned, not left to the locale: the non-UTF-8 refusal
+        # below must behave the same on every machine, and a headless
+        # contract that decodes differently per host is not a contract
+        prose = Path(args.body_file).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as err:
         # UnicodeDecodeError is a ValueError, not an OSError, so it must be
         # caught here explicitly: this read happens before any mutation, so
