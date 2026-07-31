@@ -389,7 +389,46 @@ class _JsonParser(argparse.ArgumentParser):
         raise _ArgvRefused(message)
 
 
-def _refuse_argv(argv: list[str], message: str) -> None:
+def value_taking_options(parser: argparse.ArgumentParser) -> set[str]:
+    """Every option string that consumes a following argument.
+
+    Walked out of the parser rather than hand-listed. A copied list is a
+    claim about the parser that the parser never checks: the previous
+    version promised "every value-taking flag", already missed
+    `snapshot --workspace`, and the tests that were meant to prove it drew
+    their cases from that same list — unverifiable by construction.
+    """
+    found: set[str] = set()
+    stack = [parser]
+    while stack:
+        current = stack.pop()
+        for action in current._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                stack.extend(action.choices.values())
+                continue
+            # nargs == 0 is store_true/store_const: no value follows
+            if action.option_strings and action.nargs != 0:
+                found.update(action.option_strings)
+    return found
+
+
+def resolve_option(token: str, known: set[str]) -> str | None:
+    """The option `token` names, honouring argparse's prefix abbreviation.
+
+    `--conf` is `--config` to argparse, so a scanner matching literally
+    would let the abbreviation's value through as a positional.
+    """
+    if token in known:
+        return token
+    if not token.startswith("--"):
+        return None
+    candidates = [name for name in known if name.startswith(token)]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _refuse_argv(
+    argv: list[str], message: str, *, value_taking: set[str] | None = None
+) -> None:
     """Emit the JSON refusal argparse would otherwise have skipped.
 
     Built directly rather than through `result_for`: this is the
@@ -403,37 +442,28 @@ def _refuse_argv(argv: list[str], message: str) -> None:
         ActionResult,
     )
 
-    # The verb is the first positional — but `--config <path>` takes a value,
-    # so that value is a positional too and would be mistaken for it.
-    # Scanning for "a token that looks like a verb" instead is worse: it
-    # reads verb names out of flag VALUES, so a typo'd verb with
-    # `--slug merge` would be reported as `merge`. Skip each value-taking
-    # flag's argument and take what is genuinely first.
-    # every flag that takes a value, across the global parser and all eight
-    # subparsers: each one's argument is a positional-looking token that
-    # would otherwise be mistaken for the verb or its directory
-    value_taking = {
-        "--config",
-        "--slug",
-        "--from",
-        "--title",
-        "--body-file",
-        "--message",
-        "--edit",
-        "--if-match",
-        "--branch",
-        "--if-head",
-        "--file-limit",
-        "--diff-lines",
-        "--indent",
-    }
+    # The verb is the first positional — but an option's value is a
+    # positional-looking token too and would be mistaken for it. Scanning
+    # for "a token that looks like a verb" instead is worse: it reads verb
+    # names out of option VALUES, so a typo'd verb with `--slug merge` would
+    # be reported as `merge`.
+    #
+    # The option set is derived from the parser, never hand-listed and never
+    # defaulted to a literal: a copied list is a claim about the parser that
+    # the parser never checks, and the previous one already missed
+    # `snapshot --workspace`.
+    known = (
+        value_taking
+        if value_taking is not None
+        else value_taking_options(build_parser())
+    )
     positional: list[str] = []
     skip = False
     for token in argv:
         if skip:
             skip = False
             continue
-        if token in value_taking:
+        if resolve_option(token, known) is not None:
             skip = True
             continue
         if token.startswith("-"):
@@ -460,8 +490,10 @@ def _refuse_argv(argv: list[str], message: str) -> None:
     )
 
 
-def main() -> None:
-    """Parse args and dispatch: TUI (default) or headless snapshot/actions."""
+def build_parser() -> argparse.ArgumentParser:
+    """The full CLI parser. Extracted so it can be inspected — the argv
+    scanner derives its value-taking option set from here rather than from
+    a hand-copied list that nothing checks."""
     parser = _JsonParser(
         prog="github-checker",
         description="TUI monitor for multiple GitHub repositories.",
@@ -601,10 +633,16 @@ def main() -> None:
         help="file holding the prose; the structural block is built for you",
     )
 
+    return parser
+
+
+def main() -> None:
+    """Parse args and dispatch: TUI (default) or headless snapshot/actions."""
+    parser = build_parser()
     try:
         args = parser.parse_args()
     except _ArgvRefused as err:
-        _refuse_argv(sys.argv[1:], str(err))
+        _refuse_argv(sys.argv[1:], str(err), value_taking=value_taking_options(parser))
         return
     if args.command == "snapshot":
         _run_snapshot(args.workspace, args.local_only, args.indent or None)

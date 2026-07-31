@@ -453,6 +453,11 @@ GLOBAL_FLAG_CASES = [
     (["issue-create", "--from", "dispatcher", "/repo"], "issue-create", "/repo"),
     (["merge", "/repo", "--if-head", "abc"], "merge", "/repo"),
     (["pr-detail", "/repo", "--diff-lines", "5"], "pr-detail", "/repo"),
+    # snapshot's --workspace: the hand-copied set used to miss it entirely
+    (["snapshot", "--workspace", "merge", "--bogus"], "snapshot", ""),
+    # argparse resolves `--conf` to `--config`, so a literal match would let
+    # the abbreviation's value through as a positional
+    (["--conf", "/tmp/zz.toml", "merge", "/repo"], "merge", "/repo"),
 ]
 
 
@@ -486,3 +491,36 @@ def test_a_contract_error_carries_the_original_diagnosis(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["result_kind"] == "contract_error"
     assert "not a git repository" in payload["error"]
+
+
+def test_the_value_taking_set_is_derived_from_the_parser_not_copied() -> None:
+    """A hand-copied list is a claim about the parser the parser never
+    checks: the previous one promised completeness and already missed
+    `snapshot --workspace`, while the cases meant to prove it were drawn
+    from that same list — unverifiable by construction."""
+    import github_checker.main as main_module
+
+    parser = main_module.build_parser()
+    derived = main_module.value_taking_options(parser)
+    # sampled across the global parser and several subcommands
+    for option in (
+        "--config",
+        "--workspace",
+        "--slug",
+        "--if-head",
+        "--message",
+        "--diff-lines",
+    ):
+        assert option in derived, option
+    # store_true flags take no value and must not be in the set
+    assert "--local-only" not in derived
+
+
+def test_an_abbreviated_option_still_swallows_its_value() -> None:
+    """argparse resolves `--conf` to `--config`, so a scanner matching
+    literally would let the abbreviation's value through as a positional."""
+    import github_checker.main as main_module
+
+    known = main_module.value_taking_options(main_module.build_parser())
+    assert main_module.resolve_option("--conf", known) == "--config"
+    assert main_module.resolve_option("--nonsense", known) is None
