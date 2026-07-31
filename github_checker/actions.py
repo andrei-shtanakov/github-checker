@@ -56,31 +56,118 @@ class ActionResult(BaseModel):
     issue: IssueRef | None = None
 
 
+# --- contracts/actions/v1: which fields each verb is *about* -----------------
+#
+# Wire semantics the schema freezes:
+#   field absent            -> the verb has no such concept
+#   field present, null     -> applicable, value unknown
+#   field present, false    -> applicable, definitely negative
+#
+# The envelope carries 20 optional fields, so serialising the model as-is
+# emits all of them for every verb and `pull.matches = null` becomes
+# indistinguishable from `issue-lookup.matches = null` — one meaning "no such
+# concept", the other "the inbox was not read exhaustively". That is the
+# conflation this map exists to remove.
+#
+# Serialisation itself is `exclude_unset=True`: the model is the single
+# source of truth, and what a call site explicitly set is what ships. This
+# map is the *assertion* over that — `result_for` fills an action's whole set
+# with explicit `None` so no site can forget one, and `_emit` checks the
+# resulting key set before printing. 32 of the 37 hand-written constructions
+# omitted at least one applicable field, which is why the filling is done in
+# one place rather than trusted to each caller.
+ENVELOPE_FIELDS = ("action", "dir", "ok")
+
+ACTION_FIELDS: dict[str, frozenset[str]] = {
+    "pull": frozenset({"error", "detail", "local"}),
+    "open-pr": frozenset({"error", "detail", "pr_url", "pr_state"}),
+    "propose-pr": frozenset(
+        {
+            "error",
+            "detail",
+            "pr_url",
+            "pr_state",
+            "branch",
+            "base_branch",
+            "commit_sha",
+            "changed_paths",
+        }
+    ),
+    "pr-detail": frozenset({"error", "pr_detail"}),
+    "merge": frozenset(
+        {
+            "error",
+            "detail",
+            "pr_url",
+            "merged",
+            "local_sync",
+            "gate_failed",
+            "pr_detail",
+        }
+    ),
+    "post-merge-sync": frozenset({"error", "detail", "local", "branch", "local_sync"}),
+    "issue-lookup": frozenset({"error", "matches", "malformed"}),
+    "issue-create": frozenset(
+        {"error", "detail", "created", "issue", "matches", "malformed"}
+    ),
+}
+
+
+def wire_fields(action: str) -> frozenset[str]:
+    """Fields this action is about, beyond the always-present envelope.
+
+    An action outside the map — an unknown verb, or a refusal raised before
+    one was identified — is about nothing but its own failure, so only
+    `error` accompanies the envelope. That is the CLI-parse-error variant.
+    """
+    return ACTION_FIELDS.get(action, frozenset({"error"}))
+
+
+def contracted_keys(action: str) -> set[str]:
+    """The exact JSON key set this action must serialise to."""
+    return set(ENVELOPE_FIELDS) | wire_fields(action)
+
+
+def result_for(
+    action: str, path: object, *, ok: bool, **fields: object
+) -> ActionResult:
+    """An ActionResult already carrying every field this action is about.
+
+    Serialisation uses `exclude_unset=True`, so a field a call site forgot
+    would vanish from the wire — and under this contract an absent field
+    means "the verb has no such concept", not "unknown". Filling the
+    action's whole set with explicit `None` first makes the shape a
+    property of the verb rather than of what somebody remembered to pass:
+    32 of the 37 hand-written constructions omitted at least one.
+
+    Values passed by the caller win; everything else stays an explicit
+    `None`, which is exactly the "applicable, unknown" the contract wants.
+    """
+    applicable = wire_fields(action)
+    foreign = sorted(set(fields) - applicable)
+    if foreign:
+        # Not silently dropped: a field outside this action's shape means the
+        # caller believes the verb reports something it does not, and that
+        # belief has to surface where it was formed.
+        raise ValueError(f"{action} has no concept of {foreign}")
+    base: dict[str, object] = dict.fromkeys(applicable)
+    base.update(fields)
+    return ActionResult(action=action, dir=str(path), ok=ok, **base)  # type: ignore[arg-type]
+
+
 def pull(path: Path) -> ActionResult:
     """`git pull --ff-only` in *path*; refuses non-repos, reports final state."""
     if not is_git_repo(path):
-        return ActionResult(
-            action="pull", dir=str(path), ok=False, error="not a git repository"
-        )
+        return result_for("pull", path, ok=False, error="not a git repository")
     before = head_rev(path)
     try:
         pull_ff_only(path)
     except LocalGitError as err:
-        return ActionResult(
-            action="pull",
-            dir=str(path),
-            ok=False,
-            error=str(err),
-            local=local_status(path),
+        return result_for(
+            "pull", path, ok=False, error=str(err), local=local_status(path)
         )
     detail = "already up to date" if head_rev(path) == before else "fast-forwarded"
-    return ActionResult(
-        action="pull",
-        dir=str(path),
-        ok=True,
-        detail=detail,
-        local=local_status(path),
-    )
+    return result_for("pull", path, ok=True, detail=detail, local=local_status(path))
 
 
 def open_pr(path: Path) -> ActionResult:
@@ -144,9 +231,9 @@ def open_pr(path: Path) -> ActionResult:
 
 
 def _sync_failure(path: Path, error: str) -> ActionResult:
-    return ActionResult(
-        action="post-merge-sync",
-        dir=str(path),
+    return result_for(
+        "post-merge-sync",
+        path,
         ok=False,
         local_sync="failed",
         error=error,
@@ -163,9 +250,9 @@ def post_merge_sync(path: Path) -> ActionResult:
     risk here is the user's uncommitted local work.
     """
     if not is_git_repo(path):
-        return ActionResult(
-            action="post-merge-sync",
-            dir=str(path),
+        return result_for(
+            "post-merge-sync",
+            path,
             ok=True,
             local_sync="not_applicable",
             detail="no local clone to sync",
@@ -222,9 +309,9 @@ def post_merge_sync(path: Path) -> ActionResult:
     if kept:
         detail += f"; kept {', '.join(kept)}"
     detail += cleanup_note
-    return ActionResult(
-        action="post-merge-sync",
-        dir=str(path),
+    return result_for(
+        "post-merge-sync",
+        path,
         ok=True,
         local_sync="ok",
         detail=detail,

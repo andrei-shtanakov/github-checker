@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from github_checker.actions import ActionResult
+from github_checker.actions import ActionResult, result_for
 from github_checker.ghcli import repo_slug, run_gh
 from github_checker.models import (
     ChangedFile,
@@ -349,9 +349,9 @@ def _merge_failure(
     so a protected branch, a permissions problem or a dropped connection
     exits non-zero with the pull request already squashed.
     """
-    return ActionResult(
-        action="merge",
-        dir=str(path),
+    return result_for(
+        "merge",
+        path,
         ok=False,
         merged=merged,
         local_sync="not_attempted",
@@ -405,9 +405,9 @@ def merge_pr(
         return _merge_failure(
             path, proc.stderr.strip() or "gh pr merge failed", merged=None
         )
-    return ActionResult(
-        action="merge",
-        dir=str(path),
+    return result_for(
+        "merge",
+        path,
         ok=True,
         merged=True,
         # `merge` never touches the local clone; say so rather than leaving

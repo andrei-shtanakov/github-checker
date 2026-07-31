@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from github_checker.actions import ActionResult
+from github_checker.actions import ActionResult, result_for
 from github_checker.ghcli import repo_slug, run_gh
 from github_checker.inbox import canonical_body, slug_lines, valid_sender, valid_slug
 from github_checker.models import IssueRef
@@ -90,17 +90,17 @@ def _partition(candidates: Any, slug: str) -> tuple[list[IssueRef], list[IssueRe
 def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
     """Find inbox issues claiming *slug* in this repo, in any state."""
     if not valid_slug(slug):
-        return ActionResult(
-            action="issue-lookup",
-            dir=str(path),
+        return result_for(
+            "issue-lookup",
+            path,
             ok=False,
             error=f"invalid slug: {slug!r}",
         )
     resolved = repo_slug(path, binary=binary)
     if resolved is None:
-        return ActionResult(
-            action="issue-lookup",
-            dir=str(path),
+        return result_for(
+            "issue-lookup",
+            path,
             ok=False,
             error="cannot resolve owner/repo for this clone",
         )
@@ -131,9 +131,9 @@ def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
         binary=binary,
     )
     if proc.returncode != 0:
-        return ActionResult(
-            action="issue-lookup",
-            dir=str(path),
+        return result_for(
+            "issue-lookup",
+            path,
             ok=False,
             error=proc.stderr.strip() or "gh issue list failed",
         )
@@ -145,9 +145,9 @@ def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
         # fallback would launder "we got nothing back" into "we confirmed
         # there is nothing", which is exactly the fail-open this verb must
         # not do.
-        return ActionResult(
-            action="issue-lookup",
-            dir=str(path),
+        return result_for(
+            "issue-lookup",
+            path,
             ok=False,
             error="unexpected non-JSON from gh issue list",
         )
@@ -156,9 +156,9 @@ def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
         truncated = len(candidates) >= ISSUE_LIST_LIMIT
         matches, malformed = _partition(candidates, slug)
     except (AttributeError, KeyError, TypeError, ValidationError) as err:
-        return ActionResult(
-            action="issue-lookup",
-            dir=str(path),
+        return result_for(
+            "issue-lookup",
+            path,
             ok=False,
             error=f"unexpected issue payload shape: {err!r}",
         )
@@ -167,9 +167,9 @@ def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
         # list; discard them rather than return a partial result that would
         # read as clean. `matches` stays unset (None), a value distinct
         # from both a confirmed empty list and a confirmed non-empty one.
-        return ActionResult(
-            action="issue-lookup",
-            dir=str(path),
+        return result_for(
+            "issue-lookup",
+            path,
             ok=False,
             error=(
                 f"gh issue list returned {len(candidates)} issues, at or "
@@ -178,9 +178,9 @@ def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
             ),
         )
 
-    return ActionResult(
-        action="issue-lookup",
-        dir=str(path),
+    return result_for(
+        "issue-lookup",
+        path,
         # a malformed candidate is neither a match nor an absence — it needs
         # a human, so it must not read as a clean "nothing found"
         ok=not malformed,
@@ -210,9 +210,9 @@ def issue_create(
     """
 
     def failed(error: str, created: bool | None = False) -> ActionResult:
-        return ActionResult(
-            action="issue-create",
-            dir=str(path),
+        return result_for(
+            "issue-create",
+            path,
             ok=False,
             created=created,
             error=error,
@@ -244,9 +244,9 @@ def issue_create(
             # Several existing claimants is a conflict for the caller to
             # judge (same rule issue_lookup documents for itself) — silently
             # taking [0] would pick one arbitrarily and hide the other(s).
-            return ActionResult(
-                action="issue-create",
-                dir=str(path),
+            return result_for(
+                "issue-create",
+                path,
                 ok=False,
                 created=False,
                 matches=pre.matches,
@@ -256,9 +256,9 @@ def issue_create(
                 ),
             )
         # someone got there first — the request exists, which is the point
-        return ActionResult(
-            action="issue-create",
-            dir=str(path),
+        return result_for(
+            "issue-create",
+            path,
             ok=True,
             created=False,
             issue=pre.matches[0],
@@ -304,9 +304,9 @@ def issue_create(
         issue = None
         detail = "created, but reading it back found more than one match"
 
-    return ActionResult(
-        action="issue-create",
-        dir=str(path),
+    return result_for(
+        "issue-create",
+        path,
         ok=True,
         created=True,
         issue=issue,

@@ -212,7 +212,7 @@ def test_pr_detail_reports_unavailable_state_as_json(
 def test_merge_refusal_strips_the_diff_before_printing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
     from github_checker.models import PrDetail
 
     detail = PrDetail(
@@ -227,9 +227,12 @@ def test_merge_refusal_strips_the_diff_before_printing(
         base_branch="master",
         diff="+huge diff body\n" * 500,
     )
-    refusal = ActionResult(
-        action="merge",
-        dir="/tmp/repo",
+    # built through result_for so the fixture carries the verb's contracted
+    # shape: a hand-written ActionResult would be missing applicable fields
+    # and _emit would (correctly) refuse it as a contract violation
+    refusal = result_for(
+        "merge",
+        "/tmp/repo",
         ok=False,
         merged=False,
         gate_failed=["checks"],
@@ -300,11 +303,11 @@ def test_pull_unexpected_exception_still_prints_json_not_a_traceback(
 def test_post_merge_sync_wiring_prints_the_result(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
 
-    result = ActionResult(
-        action="post-merge-sync",
-        dir="/tmp/repo",
+    result = result_for(
+        "post-merge-sync",
+        "/tmp/repo",
         ok=True,
         local_sync="ok",
         detail="fast-forwarded",
@@ -413,7 +416,7 @@ def test_issue_create_with_a_non_utf8_body_file_reports_created_false(
 
 
 def test_issue_lookup_prints_matches(monkeypatch, capsys) -> None:
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
     from github_checker.models import IssueRef
 
     ref = IssueRef(
@@ -426,12 +429,8 @@ def test_issue_lookup_prints_matches(monkeypatch, capsys) -> None:
     )
     monkeypatch.setattr(
         "github_checker.issues.issue_lookup",
-        lambda *a, **k: ActionResult(
-            action="issue-lookup",
-            dir="/tmp/repo",
-            ok=True,
-            matches=[ref],
-            malformed=[],
+        lambda *a, **k: result_for(
+            "issue-lookup", "/tmp/repo", ok=True, matches=[ref], malformed=[]
         ),
     )
     monkeypatch.setattr(
@@ -464,8 +463,8 @@ def test_body_file_is_decoded_as_utf8_not_the_locale(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(
         "github_checker.issues.issue_create",
         lambda *a, **k: __import__(
-            "github_checker.actions", fromlist=["ActionResult"]
-        ).ActionResult(action="issue-create", dir="/repo", ok=True, created=True),
+            "github_checker.actions", fromlist=["result_for"]
+        ).result_for("issue-create", "/repo", ok=True, created=True),
     )
     monkeypatch.setattr(
         "sys.argv",

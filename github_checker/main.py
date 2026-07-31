@@ -50,9 +50,62 @@ def _run_snapshot(workspace: Path, local_only: bool, indent: int | None) -> None
     print(snapshot.model_dump_json(indent=indent))
 
 
-def _emit(result: "ActionResult") -> None:
-    """Print one JSON ActionResult and honour the exit-code contract."""
-    print(result.model_dump_json(indent=2))
+# A refusal raised before the verb ever ran: argv could not be parsed, so no
+# verb-specific field has a value yet — not even an unknown one. Its shape is
+# the envelope plus `error`; `action` still names the verb that was attempted,
+# which is what a consumer probing for one needs to see.
+#
+# The caller declares this variant explicitly rather than letting _emit infer
+# it from the shape: a verb whose own failure happens to set only `error`
+# (`pull` on a non-repository does exactly that) would otherwise slip past
+# the shape check disguised as a parse error.
+PRE_DISPATCH_REFUSAL = {"action", "dir", "ok", "error"}
+
+
+def _emit(result: "ActionResult", *, pre_dispatch: bool = False) -> None:
+    """Print one JSON ActionResult and honour the exit-code contract.
+
+    contracts/actions/v1 wire semantics:
+        field absent         -> the verb has no such concept
+        field present, null  -> applicable, value unknown
+        field present, false -> applicable, definitely negative
+
+    `exclude_unset=True` makes the model the single source of truth: what a
+    call site explicitly set is what ships. The assertion below is the guard
+    that keeps that honest — a verb whose result is missing an applicable
+    field, or carrying a foreign one, fails here instead of shipping a
+    payload whose shape quietly contradicts the contract. Note that
+    `model_copy(update=...)` *adds* to `model_fields_set`, so a field set
+    once keeps serialising even after its value changes.
+    """
+    import json
+
+    from github_checker.actions import contracted_keys
+
+    payload = result.model_dump(mode="json", exclude_unset=True)
+    expected = contracted_keys(result.action)
+    if pre_dispatch:
+        expected = PRE_DISPATCH_REFUSAL
+    if set(payload) != expected:
+        # Drift inside this binary must not become a traceback with no JSON:
+        # that is the very failure the contract exists to prevent, and a
+        # consumer would see an empty stdout instead of a readable refusal.
+        # Report it *through* the contract, in the shape that is valid for
+        # any action, and fail closed.
+        missing = sorted(expected - set(payload))
+        foreign = sorted(set(payload) - expected)
+        payload = {
+            "action": result.action,
+            "dir": result.dir,
+            "ok": False,
+            "error": (
+                f"contract violation: {result.action} did not match its "
+                f"contracted shape; missing={missing} foreign={foreign}"
+            ),
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        raise SystemExit(1)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     if not result.ok:
         raise SystemExit(1)
 
@@ -82,7 +135,7 @@ def _run_propose(args: argparse.Namespace) -> None:
 def _run_pr_detail(args: argparse.Namespace) -> None:
     """Read one PR and print it inside an ActionResult envelope."""
     from github_checker import prgate
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
 
     # --file-limit/--diff-lines default to None on the parser so prgate's own
     # FILE_LIMIT/DIFF_LINE_LIMIT stay the single source of truth for the
@@ -107,9 +160,9 @@ def _run_pr_detail(args: argparse.Namespace) -> None:
     ):
         if value < 1:
             _emit(
-                ActionResult(
-                    action="pr-detail",
-                    dir=str(args.dir),
+                result_for(
+                    "pr-detail",
+                    args.dir,
                     ok=False,
                     error=f"{flag} must be >= 1, got {value}",
                 )
@@ -124,27 +177,21 @@ def _run_pr_detail(args: argparse.Namespace) -> None:
             diff_line_limit=diff_line_limit,
         )
     except prgate.GateUnavailable as err:
-        _emit(
-            ActionResult(
-                action="pr-detail", dir=str(args.dir), ok=False, error=str(err)
-            )
-        )
+        _emit(result_for("pr-detail", args.dir, ok=False, error=str(err)))
         return
-    _emit(
-        ActionResult(action="pr-detail", dir=str(args.dir), ok=True, pr_detail=detail)
-    )
+    _emit(result_for("pr-detail", args.dir, ok=True, pr_detail=detail))
 
 
 def _run_merge(args: argparse.Namespace) -> None:
     """Squash-merge one PR behind the fail-closed gate."""
     from github_checker import prgate
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
 
     if not args.if_head:
         _emit(
-            ActionResult(
-                action="merge",
-                dir=str(args.dir),
+            result_for(
+                "merge",
+                args.dir,
                 ok=False,
                 merged=False,
                 # Every other merge refusal goes through prgate._merge_failure,
@@ -179,17 +226,12 @@ def _run_post_merge_sync(args: argparse.Namespace) -> None:
 
 def _run_issue_lookup(args: argparse.Namespace) -> None:
     """Find inbox issues claiming a slug; print the JSON result."""
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
     from github_checker.issues import issue_lookup
 
     if not args.slug:
         _emit(
-            ActionResult(
-                action="issue-lookup",
-                dir=str(args.dir),
-                ok=False,
-                error="--slug is required",
-            )
+            result_for("issue-lookup", args.dir, ok=False, error="--slug is required")
         )
         return
     _emit(issue_lookup(args.dir, args.slug))
@@ -197,14 +239,14 @@ def _run_issue_lookup(args: argparse.Namespace) -> None:
 
 def _run_issue_create(args: argparse.Namespace) -> None:
     """Create an inbox issue from validated parts plus a prose file."""
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
     from github_checker.issues import issue_create
 
     def refuse(error: str) -> None:
         _emit(
-            ActionResult(
-                action="issue-create",
-                dir=str(args.dir),
+            result_for(
+                "issue-create",
+                args.dir,
                 ok=False,
                 created=False,
                 error=error,
@@ -259,7 +301,7 @@ def _dispatch_guarded(
     bug into a quieter failure. The exception type stays in `error` so it's
     still diagnosable, not just swallowed.
     """
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
 
     try:
         handler()
@@ -273,10 +315,14 @@ def _dispatch_guarded(
         # The frame list belongs on stderr, outside the stdout JSON contract:
         # it keeps the bug locatable without adding a second shape to stdout.
         traceback.print_exc()
+        # Built through result_for: an unhandled exception means this verb's
+        # own fields are *unknown*, not inapplicable. Emitting a bare
+        # envelope would tell the consumer the verb has no concept of, say,
+        # `merged` — when the truth is that we cannot say what happened.
         _emit(
-            ActionResult(
-                action=action,
-                dir=str(directory),
+            result_for(
+                action,
+                directory,
                 ok=False,
                 error=f"{type(err).__name__}: {err}",
             )
@@ -317,7 +363,13 @@ class _JsonParser(argparse.ArgumentParser):
 
 
 def _refuse_argv(argv: list[str], message: str) -> None:
-    """Emit the JSON refusal argparse would otherwise have skipped."""
+    """Emit the JSON refusal argparse would otherwise have skipped.
+
+    Built directly rather than through `result_for`: this is the
+    pre-dispatch variant, whose point is that no verb field has a value
+    yet — not even an unknown one. Filling the attempted verb's set with
+    nulls would claim more than we know.
+    """
     from github_checker.actions import ActionResult
 
     positional = [a for a in argv if not a.startswith("-")]
@@ -331,7 +383,8 @@ def _refuse_argv(argv: list[str], message: str) -> None:
             dir=positional[1] if len(positional) > 1 else "",
             ok=False,
             error=f"invalid command line: {message}",
-        )
+        ),
+        pre_dispatch=True,
     )
 
 

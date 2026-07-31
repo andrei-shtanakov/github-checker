@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from github_checker import actions
-from github_checker.actions import ActionResult
+from github_checker.actions import ActionResult, result_for
 from github_checker.localgit import (
     LocalGitError,
     _git,
@@ -109,9 +109,7 @@ def parse_if_match(raw: list[str]) -> dict[str, str]:
 
 
 def _fail(error: str, *, detail: str | None = None) -> ActionResult:
-    return ActionResult(
-        action="propose-pr", dir="", ok=False, error=error, detail=detail
-    )
+    return result_for("propose-pr", "", ok=False, error=error, detail=detail)
 
 
 def _generated_branch() -> str:
@@ -239,9 +237,9 @@ def propose_pr(
                 result_dir,
                 "`gh pr create` succeeded but returned no PR URL",
             )
-        return ActionResult(
-            action="propose-pr",
-            dir=result_dir,
+        return result_for(
+            "propose-pr",
+            result_dir,
             ok=True,
             detail="pull request created",
             pr_url=url,
