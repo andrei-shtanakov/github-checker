@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from github_checker.actions import ActionResult
 from github_checker.ghcli import repo_slug, run_gh
 from github_checker.inbox import slug_lines, valid_slug
@@ -29,6 +31,29 @@ def _ref(data: dict[str, Any]) -> IssueRef:
         author=(data.get("author") or {}).get("login", ""),
         labels=[label["name"] for label in data.get("labels") or []],
     )
+
+
+def _partition(candidates: Any, slug: str) -> tuple[list[IssueRef], list[IssueRef]]:
+    """Split search candidates into confirmed matches and malformed ones.
+
+    Raises `AttributeError`/`KeyError`/`TypeError`/`ValidationError` on any
+    shape `gh` did not promise — a top-level object or scalar instead of a
+    list, a `null` item, a candidate missing `number`, a `labels` entry
+    missing `name`, or a `number` pydantic cannot coerce to `int`. The
+    caller turns all of those into one failed `ActionResult`: a payload we
+    cannot map is a search we could not read, not an empty one.
+    """
+    matches: list[IssueRef] = []
+    malformed: list[IssueRef] = []
+    for item in candidates:
+        claimed = slug_lines(item.get("body") or "")
+        if slug not in claimed:
+            continue  # narrowed by substring search; not actually ours
+        if len(claimed) > 1:
+            malformed.append(_ref(item))
+        else:
+            matches.append(_ref(item))
+    return matches, malformed
 
 
 def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
@@ -84,16 +109,15 @@ def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
             error="unexpected non-JSON from gh search issues",
         )
 
-    matches: list[IssueRef] = []
-    malformed: list[IssueRef] = []
-    for item in candidates:
-        claimed = slug_lines(item.get("body") or "")
-        if slug not in claimed:
-            continue  # narrowed by substring search; not actually ours
-        if len(claimed) > 1:
-            malformed.append(_ref(item))
-        else:
-            matches.append(_ref(item))
+    try:
+        matches, malformed = _partition(candidates, slug)
+    except (AttributeError, KeyError, TypeError, ValidationError) as err:
+        return ActionResult(
+            action="issue-lookup",
+            dir=str(path),
+            ok=False,
+            error=f"unexpected issue payload shape: {err!r}",
+        )
 
     return ActionResult(
         action="issue-lookup",
@@ -102,7 +126,7 @@ def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
         # a human, so it must not read as a clean "nothing found"
         ok=not malformed,
         error=(
-            f"{len(malformed)} inbox issue(s) carry more than one slug: line"
+            f"{len(malformed)} inbox issue(s) contain more than one 'slug:' line"
             if malformed
             else None
         ),

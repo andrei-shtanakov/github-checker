@@ -153,3 +153,41 @@ def test_gh_failure_is_a_failed_result_not_an_empty_match(monkeypatch) -> None:
     result = issue_lookup(Path("/repo"), "wanted")
     assert result.ok is False
     assert result.matches is None or result.matches == []
+
+
+def _assert_unmappable(monkeypatch, payload) -> None:
+    """A payload we cannot map must fail closed, never read as empty."""
+    _patch(monkeypatch, Gh(payload))
+    result = issue_lookup(Path("/repo"), "wanted")
+    assert result.ok is False
+    assert result.matches is None or result.matches == []
+
+
+def test_top_level_object_instead_of_list_is_a_failed_result(monkeypatch) -> None:
+    _assert_unmappable(monkeypatch, {"number": 1})
+
+
+def test_top_level_scalar_is_a_failed_result(monkeypatch) -> None:
+    _assert_unmappable(monkeypatch, 42)
+
+
+def test_list_containing_null_is_a_failed_result(monkeypatch) -> None:
+    _assert_unmappable(monkeypatch, [None])
+
+
+def test_candidate_missing_number_is_a_failed_result(monkeypatch) -> None:
+    item = _issue(6, _body("wanted"))
+    del item["number"]
+    _assert_unmappable(monkeypatch, [item])
+
+
+def test_label_entry_missing_name_is_a_failed_result(monkeypatch) -> None:
+    item = _issue(6, _body("wanted"))
+    item["labels"] = [{}]
+    _assert_unmappable(monkeypatch, [item])
+
+
+def test_number_of_the_wrong_type_is_a_failed_result(monkeypatch) -> None:
+    item = _issue(6, _body("wanted"))
+    item["number"] = "not-a-number"
+    _assert_unmappable(monkeypatch, [item])
