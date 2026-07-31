@@ -10,6 +10,7 @@ regressed — and both need a human to say which.
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import jsonschema
@@ -110,28 +111,44 @@ def test_the_error_variants_are_closed_and_diagnostic(kind: str) -> None:
 # --- the real binary, not only the fixtures ---------------------------------
 
 
-def _run(*args: str) -> dict:
+def _run(*args: str, expect_exit: int) -> dict:
+    """Run the binary and hold it to BOTH halves of the contract.
+
+    The exit code is contract, not decoration: `0` when `ok` is true, `1`
+    when it is false. A runner that parsed the JSON and ignored the code
+    would accept a CLI that answers correctly and exits wrongly — the
+    instrument itself would then certify a broken producer. `expect_exit`
+    is required rather than defaulted so no call site can forget it.
+    """
     proc = subprocess.run(
         ["uv", "run", "github-checker", *args], capture_output=True, text=True
     )
-    return json.loads(proc.stdout)
+    assert proc.returncode == expect_exit, (
+        f"exit {proc.returncode}, expected {expect_exit}\n"
+        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is (expect_exit == 0), (
+        f"`ok` and the exit code must agree: ok={payload['ok']} exit={proc.returncode}"
+    )
+    return payload
 
 
 def test_a_real_action_result_validates() -> None:
-    VALIDATOR.validate(_run("pull", "/tmp"))
+    VALIDATOR.validate(_run("pull", "/tmp", expect_exit=1))
 
 
 def test_a_real_cli_error_validates() -> None:
     """This is the path that already caught a missing `schema_version` once:
     the field has a model default, so a model-level check passes while the
     wire payload — built with exclude_unset — silently lacks it."""
-    payload = _run("merge", "/tmp", "--pr", "1", "--if-head", "--limit")
+    payload = _run("merge", "/tmp", "--pr", "1", "--if-head", "--limit", expect_exit=1)
     assert payload["result_kind"] == "cli_error"
     VALIDATOR.validate(payload)
 
 
 def test_an_unknown_verb_is_a_cli_error_not_an_action() -> None:
-    payload = _run("no-such-verb", "/tmp")
+    payload = _run("no-such-verb", "/tmp", expect_exit=1)
     assert payload["result_kind"] == "cli_error"
     assert payload["action"] == "no-such-verb", "diagnostic only"
     VALIDATOR.validate(payload)
@@ -143,13 +160,16 @@ def test_an_unknown_verb_is_a_cli_error_not_an_action() -> None:
 # `result_for`, which production did not use there, and the model-level tests
 # never look at the wire. Only driving each verb for real closes it.
 REAL_INVOCATIONS = [
-    ("pull", ["pull", "/tmp"]),
-    ("open-pr", ["open-pr", "/tmp"]),
-    ("propose-pr", ["propose-pr", "/tmp", "--message", "x", "--edit", "a=b"]),
-    ("pr-detail", ["pr-detail", "/tmp", "1"]),
-    ("merge", ["merge", "/tmp", "1", "--if-head", "abc"]),
-    ("post-merge-sync", ["post-merge-sync", "/tmp"]),
-    ("issue-lookup", ["issue-lookup", "/tmp", "--slug", "wanted"]),
+    # (verb, argv, expected exit) — the code is contract too: /tmp is not a
+    # clone, so post-merge-sync legitimately succeeds there while the rest
+    # fail. A blanket expectation would have hidden that distinction.
+    ("pull", ["pull", "/tmp"], 1),
+    ("open-pr", ["open-pr", "/tmp"], 1),
+    ("propose-pr", ["propose-pr", "/tmp", "--message", "x", "--edit", "a=b"], 1),
+    ("pr-detail", ["pr-detail", "/tmp", "1"], 1),
+    ("merge", ["merge", "/tmp", "1", "--if-head", "abc"], 1),
+    ("post-merge-sync", ["post-merge-sync", "/tmp"], 0),
+    ("issue-lookup", ["issue-lookup", "/tmp", "--slug", "wanted"], 1),
     (
         "issue-create",
         [
@@ -164,17 +184,20 @@ REAL_INVOCATIONS = [
             "--body-file",
             "/etc/hostname",
         ],
+        1,
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "verb, argv", REAL_INVOCATIONS, ids=[v for v, _ in REAL_INVOCATIONS]
+    "verb, argv, expect_exit",
+    REAL_INVOCATIONS,
+    ids=[v for v, _, _ in REAL_INVOCATIONS],
 )
 def test_every_verb_ships_a_payload_the_schema_accepts(
-    verb: str, argv: list[str]
+    verb: str, argv: list[str], expect_exit: int
 ) -> None:
-    payload = _run(*argv)
+    payload = _run(*argv, expect_exit=expect_exit)
     assert payload["result_kind"] == "action", (
         f"{verb} did not ship an action result: {payload.get('error')}"
     )
@@ -419,7 +442,7 @@ def test_a_foreign_key_inside_a_nested_collection_is_rejected(
 def test_the_real_binary_matrix_covers_every_verb() -> None:
     """The matrix asserting nothing about its own completeness is exactly how
     a broken `open-pr` shipped: it was simply absent from the list."""
-    assert {verb for verb, _ in REAL_INVOCATIONS} == set(ACTION_FIELDS)
+    assert {verb for verb, _, _ in REAL_INVOCATIONS} == set(ACTION_FIELDS)
 
 
 def test_a_fixture_local_status_matches_what_the_binary_emits(tmp_path) -> None:
@@ -434,7 +457,7 @@ def test_a_fixture_local_status_matches_what_the_binary_emits(tmp_path) -> None:
     this contract exists to prevent.
     """
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    payload = _run("pull", str(tmp_path))
+    payload = _run("pull", str(tmp_path), expect_exit=1)
     assert payload["local"] is not None, "a real repo must report its status"
     assert set(payload["local"]) == set(_fixture("pull-success")["local"])
     VALIDATOR.validate(payload)
@@ -524,3 +547,100 @@ def test_an_abbreviated_option_still_swallows_its_value() -> None:
     known = main_module.value_taking_options(main_module.build_parser())
     assert main_module.resolve_option("--conf", known) == "--config"
     assert main_module.resolve_option("--nonsense", known) is None
+
+
+# --- the exit code is contract too ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "expected, actual, should_pass",
+    [(0, 0, True), (1, 1, True), (0, 1, False), (1, 0, False)],
+    ids=["0/0", "1/1", "0-vs-1", "1-vs-0"],
+)
+def test_the_exit_oracle_can_actually_fail(
+    expected: int, actual: int, should_pass: bool, tmp_path
+) -> None:
+    """A runner that parsed the JSON and ignored the exit code would certify
+    a CLI that answers correctly and exits wrongly. All four combinations,
+    so the oracle is proved able to fail in both directions."""
+    stub = tmp_path / "stub.py"
+    stub.write_text(
+        "import sys, json\n"
+        f"print(json.dumps({{'ok': {actual == 0}}}))\n"
+        f"sys.exit({actual})\n"
+    )
+    proc = subprocess.run([sys.executable, str(stub)], capture_output=True, text=True)
+    matched = proc.returncode == expected
+    assert matched is should_pass
+
+
+# --- local.error as a real, non-empty string --------------------------------
+
+
+def test_a_fixture_documents_a_non_null_local_error() -> None:
+    """`local.error` had a fixture only as null. Reachable for real: `pull`
+    in a repository with no commits fails, and the status read that follows
+    fails too."""
+    payload = _fixture("pull-local-status-error")
+    assert isinstance(payload["local"]["error"], str)
+    assert payload["local"]["error"].strip(), "must be a non-empty string"
+    VALIDATOR.validate(payload)
+
+
+def test_the_binary_still_reports_a_non_null_local_error(tmp_path) -> None:
+    """Re-driven through the binary, but the message text is NOT contract:
+    git's wording varies by version, locale and platform. Pinned instead:
+    presence, non-emptiness, the key set, schema validity and the exit code.
+    """
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    payload = _run("pull", str(tmp_path), expect_exit=1)
+    local = payload["local"]
+    assert local is not None
+    assert isinstance(local["error"], str) and local["error"].strip()
+    assert set(local) == set(_fixture("pull-local-status-error")["local"])
+    # against the static fixture, not a set recomputed from the emitter
+    assert set(payload) == set(_fixture("pull-local-status-error"))
+    VALIDATOR.validate(payload)
+
+
+# --- $defs.action_result is a router, not a validation root ------------------
+
+
+def test_action_result_is_not_a_looser_root_than_its_leaves() -> None:
+    """It carries no `additionalProperties` of its own, which would matter if
+    it were a public validation root. It is not: it only routes into the
+    eight leaves, each closed, so a foreign field is still rejected through
+    it. Asserted rather than assumed."""
+    router = {
+        "$schema": SCHEMA["$schema"],
+        "$defs": SCHEMA["$defs"],
+        "$ref": "#/$defs/action_result",
+    }
+    validator = jsonschema.Draft202012Validator(router)
+    good = _fixture("pull-success")
+    assert validator.is_valid(good)
+    smuggled = dict(good)
+    smuggled["smuggled"] = 1
+    assert not validator.is_valid(smuggled), (
+        "the router must inherit its leaves' closedness"
+    )
+
+
+@pytest.mark.parametrize(
+    "argv, wrong_expectation",
+    [
+        # really exits 0; claim 1
+        (["post-merge-sync", "/tmp"], 1),
+        # really exits 1; claim 0
+        (["pull", "/tmp"], 0),
+    ],
+    ids=["exits-0-claimed-1", "exits-1-claimed-0"],
+)
+def test_run_itself_refuses_a_wrong_exit_expectation(
+    argv: list[str], wrong_expectation: int
+) -> None:
+    """The previous self-test exercised the IDEA with its own subprocess, so
+    disabling the assertion inside `_run` changed nothing it could see. This
+    drives `_run` itself: the oracle has to be the thing under test."""
+    with pytest.raises(AssertionError, match="expected"):
+        _run(*argv, expect_exit=wrong_expectation)
