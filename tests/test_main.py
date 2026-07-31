@@ -488,7 +488,7 @@ def test_body_file_is_decoded_as_utf8_not_the_locale(monkeypatch, tmp_path) -> N
 
 ARGV_REFUSALS = [
     # a flag value beginning with `-` — argparse reads it as another flag
-    (["merge", "/tmp/repo", "--pr", "7", "--if-head", "--limit"], "merge", "/tmp/repo"),
+    (["merge", "/tmp/repo", "7", "--if-head", "--limit"], "merge", "/tmp/repo"),
     # a verb this build does not have: a consumer probing for a newer one
     (["no-such-verb", "/tmp/repo"], "no-such-verb", "/tmp/repo"),
     # a required positional left out

@@ -143,7 +143,7 @@ def test_a_real_cli_error_validates() -> None:
     """This is the path that already caught a missing `schema_version` once:
     the field has a model default, so a model-level check passes while the
     wire payload — built with exclude_unset — silently lacks it."""
-    payload = _run("merge", "/tmp", "--pr", "1", "--if-head", "--limit", expect_exit=1)
+    payload = _run("merge", "/tmp", "1", "--if-head", "--limit", expect_exit=1)
     assert payload["result_kind"] == "cli_error"
     VALIDATOR.validate(payload)
 
