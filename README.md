@@ -100,9 +100,10 @@ force-switch, ни force-delete не используются. Смерженн�
 равно репортит успех с пометкой в `detail`: сама синхронизация уже прошла,
 чистка веток к её контракту не относится.
 
-Все шесть headless-глаголов (`pull`, `open-pr`, `propose-pr`, `pr-detail`,
-`merge`, `post-merge-sync`) печатают ровно один JSON `ActionResult` и выходят
-с кодом 1 при `ok=false`; непойманное исключение превращается в
+Все восемь headless-глаголов (`pull`, `open-pr`, `propose-pr`, `pr-detail`,
+`merge`, `post-merge-sync`, `issue-lookup`, `issue-create`) печатают ровно
+один JSON `ActionResult` и выходят с кодом 1 при `ok=false`; непойманное
+исключение превращается в
 `ActionResult(ok=false)` вместо traceback'а на stdout — сам traceback уходит в
 stderr. `snapshot` и интерактивный TUI в этот контракт не входят — они
 `ActionResult` не печатают.
@@ -113,6 +114,49 @@ stderr. `snapshot` и интерактивный TUI в этот контрак�
 (предикат `checks-complete`) — эти два списка гейт читает, поэтому неполнота
 в них меняет вердикт. `files_truncated`/`diff_truncated` только для
 отображения: файлы и диф гейт не читает вовсе.
+
+### Inbox-issue verbs
+
+    uv run github-checker issue-lookup <dir> --slug <slug>
+    uv run github-checker issue-create <dir> --slug <slug> --from <sender> \
+      --title <title> --body-file <prose-file>
+
+These work on **inbox issues** (ADR-ECO-006): an issue labelled `inbox` whose
+body opens with a structural block of `slug:` and `from:`, then prose.
+
+`issue-lookup` searches **this repo only** — an identical slug in a sibling
+repo is a different request — in **all states**, since a closed request still
+means the conversation happened. There is no `--state all` flag: `gh search
+issues --state` only accepts `open`/`closed` and rejects `all` outright, so
+omitting `--state` entirely is what covers both. GitHub search only narrows:
+every candidate is confirmed by an exact parse of the structural block, so
+`benchmark-2` never matches `benchmark-20`. It returns two lists: `matches`
+and `malformed`. An issue carrying more than one `slug:` line lands in
+`malformed` with `ok=false` — that is an anomaly for a human, not a
+first-wins choice. A search payload `gh` returns in a shape the lookup does
+not recognize (not a list, an item missing `number`, and the like) is also a
+failed result rather than a raised exception — the same fail-closed
+guarantee, applied to malformed input from the tool itself, not just to
+malformed issue bodies.
+
+Several matches is **not** an error from this verb; it is a fact the caller
+judges.
+
+`issue-create` builds the canonical body itself from validated parts — you
+supply prose, it writes `slug:` and `from:` — so a submitted form cannot forge
+them. `--from` is validated before any network call: a value containing CR/LF
+would otherwise append lines to the structural block, a second `slug:`
+included. It re-checks for an existing match immediately before creating.
+
+`created` is three-valued and the values are not interchangeable: `true` the
+create definitively succeeded; `false` definitively not created on this
+attempt (the slug was taken, or a refusal happened before any mutation);
+`null` **unknown** — the transport broke during the call, so it may or may
+not have landed. A caller must never render `null` as "not created": the
+safe follow-up is to look again, never to create again.
+
+Losing a race is a normal outcome: if the pre-create check finds an existing
+issue, the result is `created=false, ok=true` with that issue attached.
 
 ### Snapshot-контракт v1 (заморожен)
 
