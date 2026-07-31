@@ -304,3 +304,32 @@ def test_created_true_but_read_back_finds_a_malformed_claimant(monkeypatch) -> N
     assert result.issue is None
     assert result.ok is True
     assert result.detail == "created, but the read-back found a malformed claimant"
+
+
+def test_a_failed_read_back_names_its_own_cause(monkeypatch) -> None:
+    """`created` stays True, but the operator must learn WHY the re-read
+    failed — otherwise a gh outage and a truncation refusal look identical
+    and the only recourse is re-running issue-lookup by hand."""
+
+    class GhBadReadBack(Gh):
+        def __call__(self, path, *args, **kwargs):
+            self.calls.append(args)
+            if args[:2] == ("issue", "list"):
+                # first call (pre-check) clean, second (read-back) fails
+                if len([c for c in self.calls if c[:2] == ("issue", "list")]) == 1:
+                    return subprocess.CompletedProcess(list(args), 0, "[]", "")
+                return subprocess.CompletedProcess(list(args), 1, "", "gh exploded")
+            return subprocess.CompletedProcess(
+                list(args), 0, "https://github.com/acme/widget/issues/9\n", ""
+            )
+
+    _patch(monkeypatch, GhBadReadBack([]))
+    result = issue_create(
+        Path("/repo"), slug="wanted", sender="dispatcher", title="t", prose="p"
+    )
+    assert result.ok is True
+    assert result.created is True
+    assert result.issue is None
+    assert "gh exploded" in (result.error or ""), (
+        "the read-back's cause must be carried, not discarded"
+    )

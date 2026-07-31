@@ -105,7 +105,11 @@ force-switch, ни force-delete не используются. Смерженн�
 один JSON `ActionResult` и выходят с кодом 1 при `ok=false`; непойманное
 исключение превращается в
 `ActionResult(ok=false)` вместо traceback'а на stdout — сам traceback уходит в
-stderr. `snapshot` и интерактивный TUI в этот контракт не входят — они
+stderr. **С одной известной прорехой:** значение флага, начинающееся с `-`
+(`--slug --from`), argparse отвергает своим `exit(2)` до входа в обработчик, и
+JSON не печатается вовсе — общий для всех глаголов дефект, не специфичный для
+новых; обходится через `--flag=value`. См. `@id:argparse-dash-values` в
+`TODO.md`. `snapshot` и интерактивный TUI в этот контракт не входят — они
 `ActionResult` не печатают.
 
 Большие PR усекаются явно, не молча: `files_truncated`, `diff_truncated`,

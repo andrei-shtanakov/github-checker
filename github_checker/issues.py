@@ -308,4 +308,9 @@ def issue_create(
         created=True,
         issue=issue,
         detail=detail,
+        # carried so a failed read-back names its own cause: without these an
+        # operator cannot tell a `gh` outage from a truncation refusal without
+        # re-running issue-lookup by hand
+        error=back.error,
+        malformed=back.malformed,
     )
