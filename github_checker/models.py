@@ -70,6 +70,21 @@ class Issue(BaseModel):
     labels: list[str] = []
 
 
+class IssueRef(BaseModel):
+    """One inbox issue, with every field the authoring screen renders.
+
+    Deliberately not an extension of `Issue`: that model belongs to the
+    snapshot contract, which dispatcher vendors as a pinned copy.
+    """
+
+    number: int
+    title: str
+    state: str
+    url: str
+    author: str
+    labels: list[str] = []
+
+
 class RulesetInfo(BaseModel):
     """Item of GET repos/{r}/rulesets."""
 

@@ -24,7 +24,13 @@ def run_gh(
             text=True,
             timeout=timeout,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as err:
+    except (OSError, subprocess.TimeoutExpired) as err:
+        # OSError (not just FileNotFoundError): a huge --body argv can hit
+        # E2BIG, and a restricted binary can hit PermissionError — both are
+        # real failure modes for issue_create's unbounded prose, and both
+        # must become a failed process, not an exception past this "never
+        # raises" guarantee. FileNotFoundError is already an OSError
+        # subclass, so this widens the net rather than replacing a case.
         return subprocess.CompletedProcess(
             [binary, *args], returncode=127, stdout="", stderr=str(err)
         )
