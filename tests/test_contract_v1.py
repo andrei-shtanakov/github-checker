@@ -368,6 +368,16 @@ def test_a_review_thread_missing_a_required_field_is_rejected(field: str) -> Non
         VALIDATOR.validate(payload)
 
 
+@pytest.mark.parametrize("field", ["branch", "ahead", "behind", "dirty", "error"])
+def test_a_local_status_missing_a_required_field_is_rejected(field: str) -> None:
+    """`error` included: the producer always emits it, so a schema that left
+    it optional would document a looser shape than the binary ships."""
+    payload = _fixture("pull-success")
+    del payload["local"][field]
+    with pytest.raises(jsonschema.ValidationError):
+        VALIDATOR.validate(payload)
+
+
 def test_a_foreign_field_in_a_nested_payload_is_rejected() -> None:
     payload = _valid_pr_detail_payload()
     payload["pr_detail"]["merged"] = True
@@ -412,23 +422,22 @@ def test_the_real_binary_matrix_covers_every_verb() -> None:
     assert {verb for verb, _ in REAL_INVOCATIONS} == set(ACTION_FIELDS)
 
 
-def test_a_fixture_local_status_matches_what_the_binary_emits() -> None:
+def test_a_fixture_local_status_matches_what_the_binary_emits(tmp_path) -> None:
     """A published example that drifted from real output reads as clean while
-    documenting a shape the producer no longer sends."""
-    from github_checker.actions import envelope_dump, result_for
-    from github_checker.models import LocalStatus
+    documenting a shape the producer no longer sends.
 
-    wire = envelope_dump(
-        result_for(
-            "pull",
-            "/repo",
-            ok=True,
-            local=LocalStatus(branch="master", ahead=0, behind=0, dirty=False),
-        )
-    )
-    local = wire["local"]
-    assert isinstance(local, dict)
-    assert set(local) == set(_fixture("pull-success")["local"])
+    Driven through the REAL binary against a REAL repository: every entry in
+    REAL_INVOCATIONS targets /tmp, which is not a git repo, so `local` comes
+    back null there and no producer-generated LocalStatus is ever validated
+    against the schema. An in-process construction would not close that — and
+    a test named for the binary that never runs it is the same defect class
+    this contract exists to prevent.
+    """
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    payload = _run("pull", str(tmp_path))
+    assert payload["local"] is not None, "a real repo must report its status"
+    assert set(payload["local"]) == set(_fixture("pull-success")["local"])
+    VALIDATOR.validate(payload)
 
 
 GLOBAL_FLAG_CASES = [
@@ -438,6 +447,12 @@ GLOBAL_FLAG_CASES = [
     # looks like a verb" would read `merge` out of the --slug VALUE
     (["issue-lookuq", "/repo", "--slug", "merge"], "issue-lookuq", "/repo"),
     (["--nonsense"], "unknown", ""),
+    # a subcommand flag's value is a positional-looking token too: without
+    # skipping it, `wanted` lands in `dir` on the wire
+    (["issue-lookup", "--slug", "wanted"], "issue-lookup", ""),
+    (["issue-create", "--from", "dispatcher", "/repo"], "issue-create", "/repo"),
+    (["merge", "/repo", "--if-head", "abc"], "merge", "/repo"),
+    (["pr-detail", "/repo", "--diff-lines", "5"], "pr-detail", "/repo"),
 ]
 
 

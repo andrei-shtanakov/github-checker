@@ -24,7 +24,8 @@
         "branch",
         "ahead",
         "behind",
-        "dirty"
+        "dirty",
+        "error"
       ],
       "additionalProperties": false,
       "properties": {

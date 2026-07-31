@@ -409,7 +409,24 @@ def _refuse_argv(argv: list[str], message: str) -> None:
     # reads verb names out of flag VALUES, so a typo'd verb with
     # `--slug merge` would be reported as `merge`. Skip each value-taking
     # flag's argument and take what is genuinely first.
-    value_taking = {"--config"}
+    # every flag that takes a value, across the global parser and all eight
+    # subparsers: each one's argument is a positional-looking token that
+    # would otherwise be mistaken for the verb or its directory
+    value_taking = {
+        "--config",
+        "--slug",
+        "--from",
+        "--title",
+        "--body-file",
+        "--message",
+        "--edit",
+        "--if-match",
+        "--branch",
+        "--if-head",
+        "--file-limit",
+        "--diff-lines",
+        "--indent",
+    }
     positional: list[str] = []
     skip = False
     for token in argv:
