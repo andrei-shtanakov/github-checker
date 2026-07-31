@@ -59,7 +59,47 @@ def _run_snapshot(workspace: Path, local_only: bool, indent: int | None) -> None
 # it from the shape: a verb whose own failure happens to set only `error`
 # (`pull` on a non-repository does exactly that) would otherwise slip past
 # the shape check disguised as a parse error.
-PRE_DISPATCH_REFUSAL = {"action", "dir", "ok", "error"}
+PRE_DISPATCH_REFUSAL = {"schema_version", "result_kind", "action", "dir", "ok", "error"}
+
+
+def _emit_contract_error(
+    result: "ActionResult", expected: set[str], got: set[str]
+) -> NoReturn:
+    """Report the producer's own wire drift, as its own leaf variant.
+
+    Deliberately built from literals and printed here rather than routed
+    back through `_emit`: the validator has just failed on this very
+    result, so re-entering it would either recurse or fail again. Drift
+    must not become a traceback with no JSON — a consumer would see empty
+    stdout instead of a readable refusal — and it must not become an
+    infinite loop either. If even this cannot be serialised, the process
+    exits 1 with the reason on stderr and prints nothing on stdout, which
+    is the one honest thing left.
+
+    `contract_error` is not a ninth verb: `action` is diagnostic only and
+    must never select an action-specific payload.
+    """
+    import json
+
+    from github_checker.actions import KIND_CONTRACT_ERROR, SCHEMA_VERSION
+
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "result_kind": KIND_CONTRACT_ERROR,
+        "action": result.action,
+        "dir": result.dir,
+        "ok": False,
+        "error": (
+            f"contract violation: {result.action} did not match its "
+            f"contracted shape; missing={sorted(expected - got)} "
+            f"foreign={sorted(got - expected)}"
+        ),
+    }
+    try:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    except (TypeError, ValueError) as err:  # pragma: no cover - last resort
+        print(f"contract_error could not be serialised: {err}", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def _emit(result: "ActionResult", *, pre_dispatch: bool = False) -> None:
@@ -87,24 +127,7 @@ def _emit(result: "ActionResult", *, pre_dispatch: bool = False) -> None:
     if pre_dispatch:
         expected = PRE_DISPATCH_REFUSAL
     if set(payload) != expected:
-        # Drift inside this binary must not become a traceback with no JSON:
-        # that is the very failure the contract exists to prevent, and a
-        # consumer would see an empty stdout instead of a readable refusal.
-        # Report it *through* the contract, in the shape that is valid for
-        # any action, and fail closed.
-        missing = sorted(expected - set(payload))
-        foreign = sorted(set(payload) - expected)
-        payload = {
-            "action": result.action,
-            "dir": result.dir,
-            "ok": False,
-            "error": (
-                f"contract violation: {result.action} did not match its "
-                f"contracted shape; missing={missing} foreign={foreign}"
-            ),
-        }
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
-        raise SystemExit(1)
+        _emit_contract_error(result, expected, set(payload))
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     if not result.ok:
         raise SystemExit(1)
@@ -370,12 +393,21 @@ def _refuse_argv(argv: list[str], message: str) -> None:
     yet — not even an unknown one. Filling the attempted verb's set with
     nulls would claim more than we know.
     """
-    from github_checker.actions import ActionResult
+    from github_checker.actions import (
+        KIND_CLI_ERROR,
+        SCHEMA_VERSION,
+        ActionResult,
+    )
 
     positional = [a for a in argv if not a.startswith("-")]
     verb = positional[0] if positional else ""
     _emit(
         ActionResult(
+            # both discriminators explicitly: exclude_unset drops whatever a
+            # call site did not set, and an envelope without its version is
+            # exactly what a consumer must never have to guess at
+            schema_version=SCHEMA_VERSION,
+            result_kind=KIND_CLI_ERROR,
             # `action` is best-effort: an unknown verb is reported as given,
             # so a consumer probing for a verb this version lacks sees which
             # one was refused rather than a blank.

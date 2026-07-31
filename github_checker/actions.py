@@ -31,8 +31,33 @@ from github_checker.localgit import (
 from github_checker.models import IssueRef, LocalStatus, PrDetail
 
 
+# contracts/actions/v1 wire discriminators.
+#
+# `result_kind` selects the envelope variant; only `action` means an
+# action-specific payload is present and its verb's required fields apply.
+# `contract_error` is NOT a ninth verb — it is the producer reporting its own
+# wire drift, and `action` there is diagnostic only.
+SCHEMA_VERSION = 1
+
+KIND_ACTION = "action"  # one of the eight verbs answered
+KIND_CLI_ERROR = "cli_error"  # argv refused before dispatch; nothing ran
+KIND_CONTRACT_ERROR = "contract_error"  # producer detected its own drift
+
+RESULT_KINDS = frozenset({KIND_ACTION, KIND_CLI_ERROR, KIND_CONTRACT_ERROR})
+
+
 class ActionResult(BaseModel):
-    """Outcome of one headless action; the CLI prints this as JSON."""
+    """Outcome of one headless action; the CLI prints this as JSON.
+
+    `schema_version` and `result_kind` are the wire discriminators. Without
+    them a consumer cannot tell a deliberate minimal envelope (argv refused,
+    nothing attempted) from an action result that lost its required fields —
+    both are `{action, dir, ok, error}` — and a schema permitting the minimal
+    shape would silently accept the broken one.
+    """
+
+    schema_version: int = SCHEMA_VERSION
+    result_kind: str = KIND_ACTION
 
     action: str
     dir: str
@@ -76,7 +101,7 @@ class ActionResult(BaseModel):
 # resulting key set before printing. 32 of the 37 hand-written constructions
 # omitted at least one applicable field, which is why the filling is done in
 # one place rather than trusted to each caller.
-ENVELOPE_FIELDS = ("action", "dir", "ok")
+ENVELOPE_FIELDS = ("schema_version", "result_kind", "action", "dir", "ok")
 
 ACTION_FIELDS: dict[str, frozenset[str]] = {
     "pull": frozenset({"error", "detail", "local"}),
@@ -152,7 +177,14 @@ def result_for(
         raise ValueError(f"{action} has no concept of {foreign}")
     base: dict[str, object] = dict.fromkeys(applicable)
     base.update(fields)
-    return ActionResult(action=action, dir=str(path), ok=ok, **base)  # type: ignore[arg-type]
+    return ActionResult(
+        schema_version=SCHEMA_VERSION,
+        result_kind=KIND_ACTION,
+        action=action,
+        dir=str(path),
+        ok=ok,
+        **base,  # type: ignore[arg-type]
+    )
 
 
 def pull(path: Path) -> ActionResult:

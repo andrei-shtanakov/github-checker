@@ -23,6 +23,9 @@ import pytest
 
 from github_checker.actions import (
     ACTION_FIELDS,
+    KIND_CLI_ERROR,
+    KIND_CONTRACT_ERROR,
+    RESULT_KINDS,
     ActionResult,
     contracted_keys,
     result_for,
@@ -30,7 +33,7 @@ from github_checker.actions import (
 )
 from github_checker.models import IssueRef
 
-ENVELOPE = {"action", "dir", "ok"}
+ENVELOPE = {"schema_version", "result_kind", "action", "dir", "ok"}
 
 # Spelled out, not derived from ACTION_FIELDS: a test that recomputes the map
 # it checks would pass whatever the map said, mistakes included.
@@ -223,3 +226,81 @@ def test_the_real_truncated_lookup_ships_the_whole_shape(monkeypatch) -> None:
     wire = result.model_dump(mode="json", exclude_unset=True)
     assert set(wire) == EXPECTED_KEYS["issue-lookup"]
     assert wire["matches"] is None, "unread, not confirmed-empty"
+
+
+# --- the wire discriminators ------------------------------------------------
+
+
+def test_every_envelope_carries_both_discriminators() -> None:
+    """Without them a consumer cannot tell a deliberate minimal envelope from
+    an action result that lost its required fields — both are
+    `{action, dir, ok, error}` — so a schema permitting the first would
+    silently accept the second."""
+    for action in EXPECTED_KEYS:
+        wire = shape(result_for(action, "/repo", ok=True))
+        assert "schema_version" in wire
+        assert "result_kind" in wire
+
+
+def test_an_action_result_declares_kind_action() -> None:
+    built = result_for("merge", "/repo", ok=True, merged=True)
+    payload = built.model_dump(mode="json", exclude_unset=True)
+    assert payload["result_kind"] == "action"
+    assert payload["schema_version"] == 1
+
+
+def test_the_three_kinds_are_the_whole_envelope_vocabulary() -> None:
+    """`contract_error` is an envelope variant, not a ninth verb."""
+    assert RESULT_KINDS == {"action", "cli_error", "contract_error"}
+    assert KIND_CONTRACT_ERROR not in ACTION_FIELDS
+    assert KIND_CLI_ERROR not in ACTION_FIELDS
+
+
+def test_a_cli_error_names_the_attempted_verb_without_claiming_its_shape(
+    capsys,
+) -> None:
+    """`action` is diagnostic there: it may be an unknown string, and it must
+    never select an action-specific payload."""
+    import github_checker.main as main_module
+
+    with pytest.raises(SystemExit) as exit_info:
+        main_module._refuse_argv(["no-such-verb", "/tmp/repo"], "invalid choice")
+    assert exit_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result_kind"] == "cli_error"
+    assert payload["schema_version"] == 1
+    assert payload["action"] == "no-such-verb", "kept for diagnosis"
+    assert set(payload) == ENVELOPE | {"error"}
+    assert "merged" not in payload and "matches" not in payload
+
+
+def test_a_cli_error_with_no_recognisable_verb_still_ships(capsys) -> None:
+    with pytest.raises(SystemExit):
+        main_module_refuse(["--nonsense"], "unrecognized arguments")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result_kind"] == "cli_error"
+    assert payload["action"] == "unknown"
+
+
+def main_module_refuse(argv: list[str], message: str) -> None:
+    import github_checker.main as main_module
+
+    main_module._refuse_argv(argv, message)
+
+
+def test_contract_error_is_its_own_leaf_and_does_not_recurse(capsys) -> None:
+    """The validator has just failed on this result, so re-entering it would
+    recurse or fail again. The leaf builds its payload from literals."""
+    import github_checker.main as main_module
+
+    broken = ActionResult(action="merge", dir="/repo", ok=False)  # shape short
+    with pytest.raises(SystemExit) as exit_info:
+        main_module._emit(broken)
+    assert exit_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result_kind"] == "contract_error"
+    assert payload["schema_version"] == 1
+    assert payload["action"] == "merge", "diagnostic only"
+    assert set(payload) == ENVELOPE | {"error"}
+    assert "contract violation" in payload["error"]
+    assert "merged" in payload["error"], "names what was missing"
