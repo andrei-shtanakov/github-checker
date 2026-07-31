@@ -205,3 +205,158 @@ def test_a_nested_payload_keeps_its_whole_shape() -> None:
     assert isinstance(nested, dict)
     assert set(nested) == set(detail.model_dump())
     VALIDATOR.validate(wire)
+
+
+# --- the nested PrDetail payload --------------------------------------------
+#
+# A third of the schema — pr_detail, check_run, changed_file, review_thread —
+# was exercised by nothing until these fixtures existed, and that is the hole
+# a 12-key loss fell through.
+
+
+def _fixture(name: str) -> dict:
+    return json.loads((CONTRACT / "fixtures" / f"{name}.json").read_text())
+
+
+def test_a_full_pr_detail_fixture_carries_every_field() -> None:
+    """The nested shape is fixed, not per-action: all 21 fields, always."""
+    from github_checker.models import PrDetail
+
+    nested = _fixture("pr-detail-full")["pr_detail"]
+    # model_fields is the authoritative list; model_construct() with no
+    # arguments omits the required ones and would understate it
+    assert set(nested) == set(PrDetail.model_fields)
+    assert len(nested) == 21
+
+
+@pytest.mark.parametrize(
+    "name", ["pr-detail-full", "pr-detail-truncated", "merge-refusal-with-detail"]
+)
+def test_the_nested_collections_are_not_empty(name: str) -> None:
+    """Empty arrays would validate while never entering check_run,
+    changed_file or review_thread — the sub-schemas would stay unexercised."""
+    nested = _fixture(name)["pr_detail"]
+    assert nested["checks"], "check_run unexercised"
+    assert nested["files"], "changed_file unexercised"
+    assert nested["review_threads"], "review_thread unexercised"
+    assert set(nested["checks"][0]) == {"name", "state"}
+    assert set(nested["files"][0]) == {"path", "additions", "deletions"}
+
+
+def test_the_truncation_flags_have_a_fixture_that_sets_them() -> None:
+    """A green verdict over a truncated list is not a green verdict, so the
+    flags need a payload where they are actually true."""
+    nested = _fixture("pr-detail-truncated")["pr_detail"]
+    assert nested["checks_truncated"] is True
+    assert nested["threads_truncated"] is True
+
+
+def test_a_merge_refusal_embeds_the_detail_with_the_diff_stripped() -> None:
+    """`merge` answers "why refused", not "what changed": `diff` is null by
+    contract there, and `diff_truncated` still has to be present."""
+    nested = _fixture("merge-refusal-with-detail")["pr_detail"]
+    assert nested["diff"] is None
+    assert "diff_truncated" in nested
+
+
+def test_a_real_pr_detail_matches_the_fixture_shape(monkeypatch) -> None:
+    """The binary's own nested payload, not only a hand-built one."""
+    from github_checker.actions import envelope_dump, result_for
+    from github_checker.models import PrDetail
+
+    built = PrDetail(
+        number=7,
+        title="t",
+        url="u",
+        state="OPEN",
+        is_draft=False,
+        mergeable="MERGEABLE",
+        head_branch="b",
+        head_sha="s",
+        base_branch="m",
+    )
+    wire = envelope_dump(result_for("pr-detail", "/repo", ok=True, pr_detail=built))
+    nested = wire["pr_detail"]
+    assert isinstance(nested, dict)
+    assert set(nested) == set(_fixture("pr-detail-full")["pr_detail"])
+    VALIDATOR.validate(wire)
+
+
+# --- the schema must be tight, not merely permissive ------------------------
+#
+# Positive tests only prove the schema ACCEPTS good payloads. Loosening it —
+# dropping a `required` entry — leaves every fixture valid and every positive
+# test green. Only a payload that *should* be rejected can prove tightness.
+
+
+def _valid_pr_detail_payload() -> dict:
+    return _fixture("pr-detail-full")
+
+
+# Spelled out, NOT read from the schema: a list derived from the artefact it
+# checks disappears together with whatever is deleted from that artefact, so
+# dropping a `required` entry would also drop the case that would catch it.
+PR_DETAIL_REQUIRED = [
+    "number",
+    "title",
+    "url",
+    "state",
+    "is_draft",
+    "mergeable",
+    "head_branch",
+    "head_sha",
+    "base_branch",
+    "checks",
+    "checks_truncated",
+    "files",
+    "files_total",
+    "files_truncated",
+    "review_threads",
+    "threads_truncated",
+    "diff_truncated",
+]
+
+NESTED_REQUIRED = [("pr_detail", field) for field in PR_DETAIL_REQUIRED]
+
+
+@pytest.mark.parametrize(
+    "container, field", NESTED_REQUIRED, ids=[f for _, f in NESTED_REQUIRED]
+)
+def test_a_nested_payload_missing_a_required_field_is_rejected(
+    container: str, field: str
+) -> None:
+    payload = _valid_pr_detail_payload()
+    del payload[container][field]
+    with pytest.raises(jsonschema.ValidationError):
+        VALIDATOR.validate(payload)
+
+
+@pytest.mark.parametrize("field", ["name", "state"])
+def test_a_check_run_missing_a_required_field_is_rejected(field: str) -> None:
+    payload = _valid_pr_detail_payload()
+    del payload["pr_detail"]["checks"][0][field]
+    with pytest.raises(jsonschema.ValidationError):
+        VALIDATOR.validate(payload)
+
+
+@pytest.mark.parametrize("field", ["path", "additions", "deletions"])
+def test_a_changed_file_missing_a_required_field_is_rejected(field: str) -> None:
+    payload = _valid_pr_detail_payload()
+    del payload["pr_detail"]["files"][0][field]
+    with pytest.raises(jsonschema.ValidationError):
+        VALIDATOR.validate(payload)
+
+
+@pytest.mark.parametrize("field", ["id", "is_resolved", "is_outdated"])
+def test_a_review_thread_missing_a_required_field_is_rejected(field: str) -> None:
+    payload = _valid_pr_detail_payload()
+    del payload["pr_detail"]["review_threads"][0][field]
+    with pytest.raises(jsonschema.ValidationError):
+        VALIDATOR.validate(payload)
+
+
+def test_a_foreign_field_in_a_nested_payload_is_rejected() -> None:
+    payload = _valid_pr_detail_payload()
+    payload["pr_detail"]["merged"] = True
+    with pytest.raises(jsonschema.ValidationError):
+        VALIDATOR.validate(payload)

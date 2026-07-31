@@ -403,8 +403,13 @@ def _refuse_argv(argv: list[str], message: str) -> None:
         ActionResult,
     )
 
+    # `--config <path>` takes a value, so "first token without a dash" is
+    # not the verb: it is that path. Prefer the first token that is actually
+    # a known verb; fall back to the first positional only when none is.
     positional = [a for a in argv if not a.startswith("-")]
-    verb = positional[0] if positional else ""
+    known = [a for a in positional if a in ACTION_VERBS]
+    verb = known[0] if known else (positional[0] if positional else "")
+    rest = positional[positional.index(verb) + 1 :] if verb in positional else []
     _emit(
         ActionResult(
             # both discriminators explicitly: exclude_unset drops whatever a
@@ -416,7 +421,7 @@ def _refuse_argv(argv: list[str], message: str) -> None:
             # so a consumer probing for a verb this version lacks sees which
             # one was refused rather than a blank.
             action=verb or "unknown",
-            dir=positional[1] if len(positional) > 1 else "",
+            dir=rest[0] if rest else "",
             ok=False,
             error=f"invalid command line: {message}",
         ),
