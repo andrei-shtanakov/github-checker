@@ -1097,13 +1097,18 @@ Register the parsers inside `main()`, after the `post-merge-sync` block:
     )
 ```
 
-and extend the dispatch chain:
+and extend the dispatch chain — **through `_dispatch_guarded`, like all six existing
+verbs**, not as bare calls. That wrapper is the outermost net protecting the very
+contract this task exists to protect: `_run_issue_create` reads `--body-file` with
+`read_text()`, and a non-UTF-8 file raises `UnicodeDecodeError`, which is a `ValueError`
+and so slips past the handler's `except OSError`. Unwrapped, that escapes as a bare
+traceback with no JSON at all:
 
 ```python
     elif args.command == "issue-lookup":
-        _run_issue_lookup(args)
+        _dispatch_guarded("issue-lookup", args.dir, lambda: _run_issue_lookup(args))
     elif args.command == "issue-create":
-        _run_issue_create(args)
+        _dispatch_guarded("issue-create", args.dir, lambda: _run_issue_create(args))
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
