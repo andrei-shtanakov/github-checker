@@ -28,7 +28,7 @@ from github_checker.localgit import (
     switch_branch,
     worktree_holding,
 )
-from github_checker.models import LocalStatus, PrDetail
+from github_checker.models import IssueRef, LocalStatus, PrDetail
 
 
 class ActionResult(BaseModel):
@@ -50,6 +50,10 @@ class ActionResult(BaseModel):
     local_sync: str | None = None  # ok | failed | not_attempted | not_applicable
     gate_failed: list[str] | None = None
     pr_detail: PrDetail | None = None
+    matches: list[IssueRef] | None = None
+    malformed: list[IssueRef] | None = None
+    created: bool | None = None
+    issue: IssueRef | None = None
 
 
 def pull(path: Path) -> ActionResult:
