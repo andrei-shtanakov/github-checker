@@ -65,6 +65,13 @@ def test_slug_lines_ignores_a_slug_mentioned_in_the_prose() -> None:
     assert slug_lines(body) == ["real-one"]
 
 
+def test_slug_lines_stops_at_the_blank_line() -> None:
+    # A standalone, well-formed `slug:` line after the blank — the regex
+    # would happily match it if the scan didn't stop at the blank line.
+    body = "slug: real-one\nfrom: dispatcher\n\nslug: decoy\n"
+    assert slug_lines(body) == ["real-one"]
+
+
 def test_slug_lines_reports_every_structural_slug_not_just_the_first() -> None:
     body = "slug: one\nslug: two\nfrom: dispatcher\n\nprose\n"
     assert slug_lines(body) == ["one", "two"]
