@@ -361,7 +361,7 @@ Several matches is **not** an error here — it is a fact. Refusing to create on
 
 **Scope and confirmation:**
 - Resolve `owner/repo` from `<dir>` via `repo_slug`, and search **only that repo**. Searching the whole owner would find the same slug in a *different* repo and refuse a legitimate request by citing an unrelated one.
-- `gh search issues --repo <owner>/<name> --label inbox --state all --json number,title,state,url,author,labels,body <slug>` — the free-text term narrows; it is substring-based and is **only** a filter.
+- `gh search issues --repo <owner>/<name> --label inbox --json number,title,state,url,author,labels,body <slug>` — the free-text term narrows; it is substring-based and is **only** a filter. **No `--state` flag:** `gh search issues` accepts only `{open|closed}` there and rejects `--state all` outright (verified against gh 2.83.1), while omitting it already returns both — verified against a real closed inbox issue. A closed request still means the ask happened, so missing closed issues would silently free a taken slug.
 - Confirm each candidate with `slug_lines`: exactly one value equal to `slug` → match; **more than one value and one of them equals `slug`** → malformed; otherwise skip. A candidate with two slugs, *neither* ours, is someone else's problem, not a malformed result of this lookup.
 
 - [ ] **Step 1: Write the failing test**
@@ -429,6 +429,7 @@ def test_exactly_one_match_is_returned_with_every_screen_field(
     _patch(monkeypatch, Gh([_issue(7, _body("wanted"), state="closed")]))
     result = issue_lookup(Path("/repo"), "wanted")
     assert result.ok is True
+    assert result.matches is not None
     assert len(result.matches) == 1
     ref = result.matches[0]
     assert ref.number == 7
@@ -488,7 +489,7 @@ def test_search_is_scoped_to_the_resolved_repo(monkeypatch) -> None:
     argv = " ".join(gh.calls[0])
     assert "--repo acme/widget" in argv
     assert "--owner" not in argv       # owner-wide search would cite a foreign repo
-    assert "--state all" in argv
+    assert "--state" not in argv      # gh rejects `--state all`; the default covers both
     assert "--label inbox" in argv
 
 
@@ -589,7 +590,6 @@ def issue_lookup(
         "search", "issues",
         "--repo", f"{owner}/{name}",
         "--label", "inbox",
-        "--state", "all",
         "--json", SEARCH_FIELDS,
         slug,
         binary=binary,
