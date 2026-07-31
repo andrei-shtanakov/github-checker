@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from github_checker.actions import ActionResult
 from github_checker.ghcli import repo_slug, run_gh
-from github_checker.inbox import slug_lines, valid_slug
+from github_checker.inbox import canonical_body, slug_lines, valid_sender, valid_slug
 from github_checker.models import IssueRef
 
 SEARCH_FIELDS = "number,title,state,url,author,labels,body"
@@ -132,4 +132,81 @@ def issue_lookup(path: Path, slug: str, *, binary: str = "gh") -> ActionResult:
         ),
         matches=matches,
         malformed=malformed,
+    )
+
+
+def issue_create(
+    path: Path,
+    *,
+    slug: str,
+    sender: str,
+    title: str,
+    prose: str,
+    binary: str = "gh",
+) -> ActionResult:
+    """Create an inbox issue for *slug*, unless one already exists.
+
+    The structural block is written here from validated values — a caller
+    supplies prose only, so a submitted form cannot forge `slug:`/`from:`.
+    """
+
+    def failed(error: str, created: bool | None = False) -> ActionResult:
+        return ActionResult(
+            action="issue-create",
+            dir=str(path),
+            ok=False,
+            created=created,
+            error=error,
+        )
+
+    if not valid_slug(slug):
+        return failed(f"invalid slug: {slug!r}")
+    if not valid_sender(sender):
+        return failed(f"invalid from: {sender!r}")
+    if not title.strip():
+        return failed("title is required")
+
+    pre = issue_lookup(path, slug, binary=binary)
+    if not pre.ok:
+        return failed(pre.error or "slug lookup failed before create")
+    if pre.matches:
+        # someone got there first — the request exists, which is the point
+        return ActionResult(
+            action="issue-create",
+            dir=str(path),
+            ok=True,
+            created=False,
+            issue=pre.matches[0],
+            detail="an inbox issue for this slug already exists",
+        )
+
+    proc = run_gh(
+        path,
+        "issue",
+        "create",
+        "--label",
+        "inbox",
+        "--title",
+        title,
+        "--body",
+        canonical_body(slug, sender, prose),
+        binary=binary,
+    )
+    if proc.returncode != 0:
+        # the call broke: whether the issue landed is unknown, not "no"
+        return failed(proc.stderr.strip() or "gh issue create failed", created=None)
+
+    back = issue_lookup(path, slug, binary=binary)
+    created_issue = back.matches[0] if back.ok and back.matches else None
+    return ActionResult(
+        action="issue-create",
+        dir=str(path),
+        ok=True,
+        created=True,
+        issue=created_issue,
+        detail=(
+            "created"
+            if created_issue is not None
+            else "created, but reading it back failed"
+        ),
     )
