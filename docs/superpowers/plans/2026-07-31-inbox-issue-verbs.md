@@ -611,6 +611,27 @@ def issue_lookup(
             error="unexpected non-JSON from gh search issues",
         )
 
+**Mapping a candidate must not be able to raise.** `gh`'s payload is external
+input: a top-level object instead of a list, a `null` element, a missing
+`number`, a `labels` entry without `name`, or a wrongly-typed `number` each
+raise out of the mapping and straight out of the verb — violating this plan's
+own never-raise constraint. Put the candidate loop in a helper and guard the
+call with this repo's existing idiom (`prgate.py` catches the same four):
+
+```python
+    try:
+        matches, malformed = _partition(candidates, slug)
+    except (AttributeError, KeyError, TypeError, ValidationError) as err:
+        return ActionResult(
+            action="issue-lookup", dir=str(path), ok=False,
+            error=f"unexpected issue payload shape: {err!r}",
+        )
+```
+
+`ok=False`, never a clean empty `matches`: a payload we could not map is a
+search we could not read, and letting it read as "nothing found" would free a
+slug that is actually taken. Add one test per raising shape above.
+
     matches: list[IssueRef] = []
     malformed: list[IssueRef] = []
     for item in candidates:
