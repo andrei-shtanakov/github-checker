@@ -52,10 +52,16 @@ A consumer that meets an unknown `result_kind` or an unknown
 `schema_version` must **fail closed** — not fall back to best-effort parsing.
 An envelope it cannot interpret is not an empty result.
 
-## Exit codes
+## Exit codes are contract, not decoration
 
-`0` when `ok` is true, `1` when it is false. `--help` is not a verb
-invocation: it exits `0`, prints usage, and is outside this contract.
+`0` when `ok` is true, `1` when it is false, and the two must **agree**. A
+consumer that parses the JSON and ignores the code would accept a producer
+that answers correctly and exits wrongly; the test runner here refuses that
+combination, and proves it can by driving itself with a deliberately wrong
+expectation.
+
+`--help` is not a verb invocation: it exits `0`, prints usage, and is outside
+this contract.
 
 ## Evolution
 
@@ -92,14 +98,6 @@ must refuse a major version it does not know.
   rewrite records whatever the code currently does, which is the opposite of
   a contract. When the producer changes deliberately, the fixture is updated
   by hand in the same commit.
-
-## Exit codes are contract, not decoration
-
-`0` when `ok` is true, `1` when it is false, and the two must agree. A
-consumer that parses the JSON and ignores the code would accept a producer
-that answers correctly and exits wrongly; the test runner here refuses that
-combination, and proves it can by driving itself with a deliberately wrong
-expectation.
 
 ## What is *not* contract
 
