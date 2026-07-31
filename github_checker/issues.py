@@ -28,13 +28,27 @@ ISSUE_FIELDS = "number,title,state,url,author,labels,body"
 # threads_truncated: exactly-at-the-cap is indistinguishable from "more").
 ISSUE_LIST_LIMIT = 200
 
+# Linux caps a single argv entry (`MAX_ARG_STRLEN`) at 131072 bytes
+# regardless of the overall ARG_MAX, and macOS's ARG_MAX, while usually
+# larger, is not guaranteed to be. This stays comfortably under both, so
+# an oversized --body-file is refused here — before argv is even built —
+# rather than reaching run_gh's own OSError/E2BIG guard, where the only
+# truthful `created` left is None ("transport broke, may have landed").
+# Refusing here first means "nothing was attempted" stays expressible.
+PROSE_BYTE_LIMIT = 100_000
+
 
 def _ref(data: dict[str, Any]) -> IssueRef:
     """Map one `gh issue list` item to an IssueRef."""
     return IssueRef(
         number=data["number"],
         title=data.get("title", ""),
-        state=data.get("state", ""),
+        # gh issue list sends "OPEN"/"CLOSED"; lowercased for two reasons:
+        # this tool's own --state flag speaks open|closed|all, so emitting
+        # the shouted form would mean two vocabularies for one concept, and
+        # this value is display text for a console, where shouting reads as
+        # a defect rather than emphasis.
+        state=(data.get("state") or "").lower(),
         url=data.get("url", ""),
         author=(data.get("author") or {}).get("login", ""),
         labels=[label["name"] for label in data.get("labels") or []],
@@ -207,6 +221,12 @@ def issue_create(
         return failed(f"invalid from: {sender!r}")
     if not title.strip():
         return failed("title is required")
+    prose_bytes = len(prose.encode("utf-8"))
+    if prose_bytes > PROSE_BYTE_LIMIT:
+        return failed(
+            f"--body-file is {prose_bytes} bytes, over the "
+            f"{PROSE_BYTE_LIMIT}-byte prose limit"
+        )
 
     resolved = repo_slug(path, binary=binary)
     if resolved is None:

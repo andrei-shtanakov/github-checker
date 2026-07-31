@@ -8,7 +8,10 @@ from pathlib import Path
 from github_checker.issues import ISSUE_LIST_LIMIT, issue_lookup
 
 
-def _issue(number: int, body: str, *, state: str = "open") -> dict:
+def _issue(number: int, body: str, *, state: str = "OPEN") -> dict:
+    # Uppercase default: `gh issue list` really sends "OPEN"/"CLOSED" (unlike
+    # `gh search issues`, which sent lowercase) — feeding lowercase here
+    # would let the state-normalisation in `_ref` go unexercised.
     return {
         "number": number,
         "title": f"issue {number}",
@@ -57,14 +60,16 @@ def test_no_candidates_is_an_empty_match_not_an_error(monkeypatch) -> None:
 def test_exactly_one_match_is_returned_with_every_screen_field(
     monkeypatch,
 ) -> None:
-    _patch(monkeypatch, Gh([_issue(7, _body("wanted"), state="closed")]))
+    _patch(monkeypatch, Gh([_issue(7, _body("wanted"), state="CLOSED")]))
     result = issue_lookup(Path("/repo"), "wanted")
     assert result.ok is True
     assert result.matches is not None
     assert len(result.matches) == 1
     ref = result.matches[0]
     assert ref.number == 7
-    assert ref.state == "closed"  # closed issues count — the ask already happened
+    # gh sends "CLOSED"; normalised to lowercase — this pins that, not just
+    # that closed issues count (the ask already happened either way).
+    assert ref.state == "closed"
     assert ref.url.endswith("/issues/7")
     assert ref.author == "someone"
     assert ref.labels == ["inbox"]

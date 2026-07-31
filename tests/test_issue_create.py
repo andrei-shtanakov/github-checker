@@ -8,11 +8,12 @@ from github_checker.issues import issue_create
 
 
 def _existing(slug: str, *, number: int = 5) -> list[dict]:
+    # Uppercase "OPEN": what `gh issue list` really sends.
     return [
         {
             "number": number,
             "title": "already here",
-            "state": "open",
+            "state": "OPEN",
             "url": f"https://github.com/acme/widget/issues/{number}",
             "author": {"login": "someone"},
             "labels": [{"name": "inbox"}],
@@ -127,6 +128,57 @@ def test_several_existing_matches_are_surfaced_not_silently_narrowed(
     assert not any(c[:2] == ("issue", "create") for c in gh.calls)
 
 
+def test_pre_check_failure_refuses_before_any_create_call(monkeypatch) -> None:
+    """If the pre-create lookup itself could not be trusted (here: a
+    malformed candidate carrying two `slug:` lines), issue_create must not
+    proceed to create. This is the guard that makes issue_lookup's own
+    fail-closed guarantees (malformed candidates, the truncation cap)
+    actually matter to a caller of issue_create, not just to issue_lookup's
+    own callers.
+    """
+    malformed_precheck = [
+        {
+            "number": 3,
+            "title": "x",
+            "state": "OPEN",
+            "url": "https://github.com/acme/widget/issues/3",
+            "author": {"login": "someone"},
+            "labels": [{"name": "inbox"}],
+            "body": "slug: wanted\nslug: other\nfrom: dispatcher\n\nprose\n",
+        }
+    ]
+    gh = Gh([malformed_precheck])
+    _patch(monkeypatch, gh)
+    result = issue_create(
+        Path("/repo"), slug="wanted", sender="dispatcher", title="t", prose="p"
+    )
+    assert result.ok is False
+    assert result.created is False
+    assert not any(c[:2] == ("issue", "create") for c in gh.calls)
+
+
+def test_prose_over_the_byte_limit_refuses_before_any_gh_call(monkeypatch) -> None:
+    """A --body-file large enough to risk E2BIG in real argv is refused
+    here, before any gh call — created=False (nothing attempted), not the
+    created=None a transport failure mid-call would mean.
+    """
+    from github_checker.issues import PROSE_BYTE_LIMIT
+
+    gh = Gh([[]])
+    _patch(monkeypatch, gh)
+    result = issue_create(
+        Path("/repo"),
+        slug="wanted",
+        sender="dispatcher",
+        title="t",
+        prose="x" * (PROSE_BYTE_LIMIT + 1),
+    )
+    assert result.ok is False
+    assert result.created is False
+    assert str(PROSE_BYTE_LIMIT) in (result.error or "")
+    assert gh.calls == []
+
+
 def test_an_invalid_sender_refuses_before_any_gh_call(monkeypatch) -> None:
     gh = Gh([[]])
     _patch(monkeypatch, gh)
@@ -236,7 +288,7 @@ def test_created_true_but_read_back_finds_a_malformed_claimant(monkeypatch) -> N
         {
             "number": 11,
             "title": "x",
-            "state": "open",
+            "state": "OPEN",
             "url": "https://github.com/acme/widget/issues/11",
             "author": {"login": "someone"},
             "labels": [{"name": "inbox"}],
