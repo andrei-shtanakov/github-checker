@@ -177,6 +177,65 @@ def _run_post_merge_sync(args: argparse.Namespace) -> None:
     _emit(post_merge_sync(args.dir))
 
 
+def _run_issue_lookup(args: argparse.Namespace) -> None:
+    """Find inbox issues claiming a slug; print the JSON result."""
+    from github_checker.actions import ActionResult
+    from github_checker.issues import issue_lookup
+
+    if not args.slug:
+        _emit(
+            ActionResult(
+                action="issue-lookup",
+                dir=str(args.dir),
+                ok=False,
+                error="--slug is required",
+            )
+        )
+        return
+    _emit(issue_lookup(args.dir, args.slug))
+
+
+def _run_issue_create(args: argparse.Namespace) -> None:
+    """Create an inbox issue from validated parts plus a prose file."""
+    from github_checker.actions import ActionResult
+    from github_checker.issues import issue_create
+
+    def refuse(error: str) -> None:
+        _emit(
+            ActionResult(
+                action="issue-create",
+                dir=str(args.dir),
+                ok=False,
+                created=False,
+                error=error,
+            )
+        )
+
+    for flag, value in (
+        ("--slug", args.slug),
+        ("--from", args.sender),
+        ("--title", args.title),
+        ("--body-file", args.body_file),
+    ):
+        if not value:
+            refuse(f"{flag} is required")
+            return
+    try:
+        prose = Path(args.body_file).read_text()
+    except OSError as err:
+        refuse(f"cannot read --body-file: {err}")
+        return
+    _emit(
+        issue_create(
+            args.dir,
+            slug=args.slug,
+            sender=args.sender,
+            title=args.title,
+            prose=prose,
+        )
+    )
+
+
 def _dispatch_guarded(
     action: str, directory: Path, handler: Callable[[], None]
 ) -> None:
@@ -326,6 +385,35 @@ def main() -> None:
     )
     sync_p.add_argument("dir", type=Path, help="path to the local clone")
 
+    lookup_p = sub.add_parser(
+        "issue-lookup",
+        help="find inbox issues claiming a slug in this repo; prints JSON",
+    )
+    lookup_p.add_argument("dir", type=Path, help="path to the local clone")
+    # NOT required=True anywhere below: argparse would exit(2) with usage on
+    # stderr and break the headless JSON contract; the handlers validate.
+    lookup_p.add_argument("--slug", default=None, help="canonical item slug")
+
+    create_p = sub.add_parser(
+        "issue-create",
+        help="create an inbox issue for a slug, unless one exists; prints JSON",
+    )
+    create_p.add_argument("dir", type=Path, help="path to the local clone")
+    create_p.add_argument("--slug", default=None, help="canonical item slug")
+    create_p.add_argument(
+        "--from",
+        dest="sender",
+        default=None,
+        help="requesting repo, optionally repo#slug",
+    )
+    create_p.add_argument("--title", default=None, help="issue title")
+    create_p.add_argument(
+        "--body-file",
+        dest="body_file",
+        default=None,
+        help="file holding the prose; the structural block is built for you",
+    )
+
     args = parser.parse_args()
     if args.command == "snapshot":
         _run_snapshot(args.workspace, args.local_only, args.indent or None)
@@ -343,6 +431,10 @@ def main() -> None:
         _dispatch_guarded(
             "post-merge-sync", args.dir, lambda: _run_post_merge_sync(args)
         )
+    elif args.command == "issue-lookup":
+        _dispatch_guarded("issue-lookup", args.dir, lambda: _run_issue_lookup(args))
+    elif args.command == "issue-create":
+        _dispatch_guarded("issue-create", args.dir, lambda: _run_issue_create(args))
     else:
         _run_tui(args.config)
 

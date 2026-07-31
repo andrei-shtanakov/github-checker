@@ -318,3 +318,87 @@ def test_post_merge_sync_wiring_prints_the_result(
     assert payload["action"] == "post-merge-sync"
     assert payload["ok"] is True
     assert payload["local_sync"] == "ok"
+
+
+def test_issue_create_without_from_returns_json_not_a_usage_error(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    body = tmp_path / "prose.md"
+    body.write_text("prose")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "github-checker",
+            "issue-create",
+            "/tmp/repo",
+            "--slug",
+            "wanted",
+            "--title",
+            "t",
+            "--body-file",
+            str(body),
+        ],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+    assert exit_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert "--from" in payload["error"]
+
+
+def test_issue_create_with_a_missing_body_file_returns_json(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "github-checker",
+            "issue-create",
+            "/tmp/repo",
+            "--slug",
+            "wanted",
+            "--from",
+            "dispatcher",
+            "--title",
+            "t",
+            "--body-file",
+            "/no/such/file",
+        ],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+    assert exit_info.value.code == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_issue_lookup_prints_matches(monkeypatch, capsys) -> None:
+    from github_checker.actions import ActionResult
+    from github_checker.models import IssueRef
+
+    ref = IssueRef(
+        number=7,
+        title="t",
+        state="open",
+        url="https://example.invalid/7",
+        author="a",
+        labels=["inbox"],
+    )
+    monkeypatch.setattr(
+        "github_checker.issues.issue_lookup",
+        lambda *a, **k: ActionResult(
+            action="issue-lookup",
+            dir="/tmp/repo",
+            ok=True,
+            matches=[ref],
+            malformed=[],
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["github-checker", "issue-lookup", "/tmp/repo", "--slug", "wanted"],
+    )
+    main_module.main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["matches"][0]["number"] == 7
