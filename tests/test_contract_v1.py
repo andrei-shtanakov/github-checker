@@ -319,6 +319,19 @@ PR_DETAIL_REQUIRED = [
 NESTED_REQUIRED = [("pr_detail", field) for field in PR_DETAIL_REQUIRED]
 
 
+def test_the_literal_required_list_still_matches_the_schema() -> None:
+    """A second, independent route to the same fact.
+
+    The parametrised cases below are generated from the literal above, so
+    replacing that literal with a value read out of the schema would also
+    delete the case that catches a dropped `required` entry — you cannot
+    assert "this list was typed by hand" from inside the test. This
+    comparison closes that: whichever side moves, it fails.
+    """
+    assert set(PR_DETAIL_REQUIRED) == set(SCHEMA["$defs"]["pr_detail"]["required"])
+    assert len(PR_DETAIL_REQUIRED) == 17
+
+
 @pytest.mark.parametrize(
     "container, field", NESTED_REQUIRED, ids=[f for _, f in NESTED_REQUIRED]
 )
@@ -360,3 +373,101 @@ def test_a_foreign_field_in_a_nested_payload_is_rejected() -> None:
     payload["pr_detail"]["merged"] = True
     with pytest.raises(jsonschema.ValidationError):
         VALIDATOR.validate(payload)
+
+
+# --- the guards the last review found missing --------------------------------
+
+
+def test_every_nested_payload_is_closed() -> None:
+    """`additionalProperties: false` on pr_detail alone is not enough: a
+    foreign key inside a check run, a changed file or a review thread would
+    pass while the outer object stayed closed."""
+    for name in (
+        "pr_detail",
+        "check_run",
+        "changed_file",
+        "review_thread",
+        "issue_ref",
+        "local_status",
+    ):
+        assert SCHEMA["$defs"][name]["additionalProperties"] is False, name
+
+
+@pytest.mark.parametrize(
+    "collection, index",
+    [("checks", 0), ("files", 0), ("review_threads", 0)],
+)
+def test_a_foreign_key_inside_a_nested_collection_is_rejected(
+    collection: str, index: int
+) -> None:
+    payload = _valid_pr_detail_payload()
+    payload["pr_detail"][collection][index]["smuggled"] = 1
+    with pytest.raises(jsonschema.ValidationError):
+        VALIDATOR.validate(payload)
+
+
+def test_the_real_binary_matrix_covers_every_verb() -> None:
+    """The matrix asserting nothing about its own completeness is exactly how
+    a broken `open-pr` shipped: it was simply absent from the list."""
+    assert {verb for verb, _ in REAL_INVOCATIONS} == set(ACTION_FIELDS)
+
+
+def test_a_fixture_local_status_matches_what_the_binary_emits() -> None:
+    """A published example that drifted from real output reads as clean while
+    documenting a shape the producer no longer sends."""
+    from github_checker.actions import envelope_dump, result_for
+    from github_checker.models import LocalStatus
+
+    wire = envelope_dump(
+        result_for(
+            "pull",
+            "/repo",
+            ok=True,
+            local=LocalStatus(branch="master", ahead=0, behind=0, dirty=False),
+        )
+    )
+    local = wire["local"]
+    assert isinstance(local, dict)
+    assert set(local) == set(_fixture("pull-success")["local"])
+
+
+GLOBAL_FLAG_CASES = [
+    (["--config", "/tmp/x.toml", "merge"], "merge", ""),
+    (["--config", "/tmp/x.toml", "merge", "/repo"], "merge", "/repo"),
+    # a typo'd verb must be reported as typed — scanning for "a token that
+    # looks like a verb" would read `merge` out of the --slug VALUE
+    (["issue-lookuq", "/repo", "--slug", "merge"], "issue-lookuq", "/repo"),
+    (["--nonsense"], "unknown", ""),
+]
+
+
+@pytest.mark.parametrize(
+    "argv, action, directory", GLOBAL_FLAG_CASES, ids=lambda v: str(v)[:28]
+)
+def test_a_cli_error_attributes_the_verb_past_global_flags(
+    capsys, argv: list[str], action: str, directory: str
+) -> None:
+    import github_checker.main as main_module
+
+    with pytest.raises(SystemExit):
+        main_module._refuse_argv(argv, "invalid choice")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == action
+    assert payload["dir"] == directory
+
+
+def test_a_contract_error_carries_the_original_diagnosis(capsys) -> None:
+    """Drift on a failing verb must not destroy the reason the verb failed —
+    the operator would be told about our bug instead of about theirs."""
+    from github_checker.actions import ActionResult
+
+    import github_checker.main as main_module
+
+    broken = ActionResult(
+        action="pull", dir="/repo", ok=False, error="not a git repository"
+    )
+    with pytest.raises(SystemExit):
+        main_module._emit(broken)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result_kind"] == "contract_error"
+    assert "not a git repository" in payload["error"]

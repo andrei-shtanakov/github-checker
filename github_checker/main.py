@@ -403,13 +403,27 @@ def _refuse_argv(argv: list[str], message: str) -> None:
         ActionResult,
     )
 
-    # `--config <path>` takes a value, so "first token without a dash" is
-    # not the verb: it is that path. Prefer the first token that is actually
-    # a known verb; fall back to the first positional only when none is.
-    positional = [a for a in argv if not a.startswith("-")]
-    known = [a for a in positional if a in ACTION_VERBS]
-    verb = known[0] if known else (positional[0] if positional else "")
-    rest = positional[positional.index(verb) + 1 :] if verb in positional else []
+    # The verb is the first positional — but `--config <path>` takes a value,
+    # so that value is a positional too and would be mistaken for it.
+    # Scanning for "a token that looks like a verb" instead is worse: it
+    # reads verb names out of flag VALUES, so a typo'd verb with
+    # `--slug merge` would be reported as `merge`. Skip each value-taking
+    # flag's argument and take what is genuinely first.
+    value_taking = {"--config"}
+    positional: list[str] = []
+    skip = False
+    for token in argv:
+        if skip:
+            skip = False
+            continue
+        if token in value_taking:
+            skip = True
+            continue
+        if token.startswith("-"):
+            continue
+        positional.append(token)
+    verb = positional[0] if positional else ""
+    rest = positional[1:]
     _emit(
         ActionResult(
             # both discriminators explicitly: exclude_unset drops whatever a

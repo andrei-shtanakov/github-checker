@@ -10,7 +10,8 @@
     "branch": "master",
     "ahead": 0,
     "behind": 0,
-    "dirty": false
+    "dirty": false,
+    "error": null
   },
   "branch": null,
   "local_sync": "failed"
