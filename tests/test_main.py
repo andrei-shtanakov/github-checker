@@ -485,3 +485,47 @@ def test_body_file_is_decoded_as_utf8_not_the_locale(monkeypatch, tmp_path) -> N
     )
     main_module.main()
     assert seen.get("encoding") == "utf-8"
+
+
+ARGV_REFUSALS = [
+    # a flag value beginning with `-` — argparse reads it as another flag
+    (["merge", "/tmp/repo", "--pr", "7", "--if-head", "--limit"], "merge", "/tmp/repo"),
+    # a verb this build does not have: a consumer probing for a newer one
+    (["no-such-verb", "/tmp/repo"], "no-such-verb", "/tmp/repo"),
+    # a required positional left out
+    (["merge"], "merge", ""),
+    # an extra positional
+    (["pull", "/tmp/repo", "extra"], "pull", "/tmp/repo"),
+    # no verb at all
+    (["--nonsense"], "unknown", ""),
+    (["issue-create", "/tmp/repo", "--slug", "--from"], "issue-create", "/tmp/repo"),
+]
+
+
+@pytest.mark.parametrize("argv, action, directory", ARGV_REFUSALS)
+def test_argv_refusal_is_json_not_argparse_usage(
+    monkeypatch, capsys, argv: list[str], action: str, directory: str
+) -> None:
+    """argparse's own error path writes usage to stderr and exits 2, printing
+    no JSON at all — bypassing every handler's validation and breaking the
+    contract machine consumers depend on."""
+    monkeypatch.setattr("sys.argv", ["github-checker", *argv])
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+    assert exit_info.value.code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False
+    assert payload["action"] == action
+    assert payload["dir"] == directory
+    assert "invalid command line" in payload["error"]
+
+
+def test_help_still_exits_zero_without_json(monkeypatch, capsys) -> None:
+    """`--help` reaches argparse's `exit()`, not `error()`. It is not a verb
+    invocation, so it is outside the JSON contract and must stay that way."""
+    monkeypatch.setattr("sys.argv", ["github-checker", "--help"])
+    with pytest.raises(SystemExit) as exit_info:
+        main_module.main()
+    assert exit_info.value.code == 0
+    assert "usage:" in capsys.readouterr().out

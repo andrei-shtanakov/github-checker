@@ -7,7 +7,7 @@ import tomllib
 import traceback
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from pydantic import ValidationError
 
@@ -283,9 +283,61 @@ def _dispatch_guarded(
         )
 
 
+# Every verb that prints an ActionResult. `snapshot` is deliberately absent:
+# it has its own shape, and the TUI has none at all.
+ACTION_VERBS = (
+    "pull",
+    "open-pr",
+    "propose-pr",
+    "pr-detail",
+    "merge",
+    "post-merge-sync",
+    "issue-lookup",
+    "issue-create",
+)
+
+
+class _ArgvRefused(Exception):
+    """argparse rejected argv before any handler could run."""
+
+
+class _JsonParser(argparse.ArgumentParser):
+    """An ArgumentParser that refuses through the JSON contract.
+
+    argparse's own `error()` writes usage to stderr and calls `exit(2)`,
+    printing no JSON at all — so a value beginning with `-` (`--slug --from`),
+    an unknown verb, a missing or extra positional each bypassed every
+    handler's validation and broke the "exactly one JSON on stdout" contract
+    that machine consumers depend on. `error()` is the single funnel for all
+    of them; `--help` goes through `exit()` instead and is untouched.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        raise _ArgvRefused(message)
+
+
+def _refuse_argv(argv: list[str], message: str) -> None:
+    """Emit the JSON refusal argparse would otherwise have skipped."""
+    from github_checker.actions import ActionResult
+
+    positional = [a for a in argv if not a.startswith("-")]
+    verb = positional[0] if positional else ""
+    _emit(
+        ActionResult(
+            # `action` is best-effort: an unknown verb is reported as given,
+            # so a consumer probing for a verb this version lacks sees which
+            # one was refused rather than a blank.
+            action=verb or "unknown",
+            dir=positional[1] if len(positional) > 1 else "",
+            ok=False,
+            error=f"invalid command line: {message}",
+        )
+    )
+
+
 def main() -> None:
     """Parse args and dispatch: TUI (default) or headless snapshot/actions."""
-    parser = argparse.ArgumentParser(
+    parser = _JsonParser(
         prog="github-checker",
         description="TUI monitor for multiple GitHub repositories.",
     )
@@ -424,7 +476,11 @@ def main() -> None:
         help="file holding the prose; the structural block is built for you",
     )
 
-    args = parser.parse_args()
+    try:
+        args = parser.parse_args()
+    except _ArgvRefused as err:
+        _refuse_argv(sys.argv[1:], str(err))
+        return
     if args.command == "snapshot":
         _run_snapshot(args.workspace, args.local_only, args.indent or None)
     elif args.command in ("pull", "open-pr"):
