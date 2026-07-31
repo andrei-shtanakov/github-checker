@@ -29,3 +29,37 @@ def valid_sender(value: str) -> bool:
     there — a second `slug:` included.
     """
     return bool(SENDER_RE.fullmatch(value))
+
+
+_SLUG_LINE_RE = re.compile(r"\A\s*slug:\s*(\S+)\s*\Z")
+
+
+def slug_lines(body: str) -> list[str]:
+    """Values of every `slug:` line in the body's structural block.
+
+    The block is the leading lines up to the first blank one (ADR-ECO-006
+    D3). Scanning only it is what keeps a `slug:` written inside the prose
+    from being read as identity. The count is meaningful to the caller:
+    two claims are malformed, not a first-wins choice.
+    """
+    values: list[str] = []
+    for raw in body.replace("\r\n", "\n").split("\n"):
+        if not raw.strip():
+            break
+        match = _SLUG_LINE_RE.match(raw)
+        if match:
+            values.append(match.group(1))
+    return values
+
+
+def canonical_body(slug: str, sender: str, prose: str) -> str:
+    """Build an ADR-ECO-006 D3 body: structural block, blank line, prose.
+
+    The caller supplies prose only — the structural lines are ours to
+    write, so they cannot be spoofed by what a form submitted.
+    """
+    if not valid_slug(slug):
+        raise ValueError(f"invalid slug: {slug!r}")
+    if not valid_sender(sender):
+        raise ValueError(f"invalid from: {sender!r}")
+    return f"slug: {slug}\nfrom: {sender}\n\n{prose}"
