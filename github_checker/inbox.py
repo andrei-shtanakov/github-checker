@@ -8,9 +8,10 @@ subprocess in the way.
 
 import re
 
-# ADR-ECO-005 PF-2B. `\Z` not `$`: `$` matches before a trailing newline,
-# so a `$`-anchored pattern would accept "dispatcher\n" — exactly the
-# value this rejects elsewhere.
+# ADR-ECO-005 PF-2B. `\Z` not `$`: under `fullmatch` both reject a trailing
+# newline, but `$` matches just before one — so switching to `.match()` or
+# `.search()` later would silently start accepting "dispatcher\n", the exact
+# value the injection guard below exists to reject.
 SLUG_RE = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}\Z")
 SENDER_RE = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,63}(#[a-z0-9][a-z0-9._-]{0,63})?\Z")
 
