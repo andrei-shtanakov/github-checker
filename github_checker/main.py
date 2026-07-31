@@ -7,7 +7,7 @@ import tomllib
 import traceback
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from pydantic import ValidationError
 
@@ -50,9 +50,89 @@ def _run_snapshot(workspace: Path, local_only: bool, indent: int | None) -> None
     print(snapshot.model_dump_json(indent=indent))
 
 
-def _emit(result: "ActionResult") -> None:
-    """Print one JSON ActionResult and honour the exit-code contract."""
-    print(result.model_dump_json(indent=2))
+# A refusal raised before the verb ever ran: argv could not be parsed, so no
+# verb-specific field has a value yet — not even an unknown one. Its shape is
+# the envelope plus `error`; `action` still names the verb that was attempted,
+# which is what a consumer probing for one needs to see.
+#
+# The caller declares this variant explicitly rather than letting _emit infer
+# it from the shape: a verb whose own failure happens to set only `error`
+# (`pull` on a non-repository does exactly that) would otherwise slip past
+# the shape check disguised as a parse error.
+PRE_DISPATCH_REFUSAL = {"schema_version", "result_kind", "action", "dir", "ok", "error"}
+
+
+def _emit_contract_error(
+    result: "ActionResult", expected: set[str], got: set[str]
+) -> NoReturn:
+    """Report the producer's own wire drift, as its own leaf variant.
+
+    Deliberately built from literals and printed here rather than routed
+    back through `_emit`: the validator has just failed on this very
+    result, so re-entering it would either recurse or fail again. Drift
+    must not become a traceback with no JSON — a consumer would see empty
+    stdout instead of a readable refusal — and it must not become an
+    infinite loop either. If even this cannot be serialised, the process
+    exits 1 with the reason on stderr and prints nothing on stdout, which
+    is the one honest thing left.
+
+    `contract_error` is not a ninth verb: `action` is diagnostic only and
+    must never select an action-specific payload.
+    """
+    import json
+
+    from github_checker.actions import KIND_CONTRACT_ERROR, SCHEMA_VERSION
+
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "result_kind": KIND_CONTRACT_ERROR,
+        "action": result.action,
+        "dir": result.dir,
+        "ok": False,
+        "error": (
+            f"contract violation: {result.action} did not match its "
+            f"contracted shape; missing={sorted(expected - got)} "
+            f"foreign={sorted(got - expected)}"
+            # the original diagnosis rides along: without it, drift on a
+            # failing verb destroys the reason the verb failed, and the
+            # operator is told about our bug instead of about theirs
+            + (f"; original error: {result.error}" if result.error else "")
+        ),
+    }
+    try:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    except (TypeError, ValueError) as err:  # pragma: no cover - last resort
+        print(f"contract_error could not be serialised: {err}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def _emit(result: "ActionResult", *, pre_dispatch: bool = False) -> None:
+    """Print one JSON ActionResult and honour the exit-code contract.
+
+    contracts/actions/v1 wire semantics:
+        field absent         -> the verb has no such concept
+        field present, null  -> applicable, value unknown
+        field present, false -> applicable, definitely negative
+
+    `exclude_unset=True` makes the model the single source of truth: what a
+    call site explicitly set is what ships. The assertion below is the guard
+    that keeps that honest — a verb whose result is missing an applicable
+    field, or carrying a foreign one, fails here instead of shipping a
+    payload whose shape quietly contradicts the contract. Note that
+    `model_copy(update=...)` *adds* to `model_fields_set`, so a field set
+    once keeps serialising even after its value changes.
+    """
+    import json
+
+    from github_checker.actions import contracted_keys, envelope_dump
+
+    payload = envelope_dump(result)
+    expected = contracted_keys(result.action)
+    if pre_dispatch:
+        expected = PRE_DISPATCH_REFUSAL
+    if set(payload) != expected:
+        _emit_contract_error(result, expected, set(payload))
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     if not result.ok:
         raise SystemExit(1)
 
@@ -82,7 +162,7 @@ def _run_propose(args: argparse.Namespace) -> None:
 def _run_pr_detail(args: argparse.Namespace) -> None:
     """Read one PR and print it inside an ActionResult envelope."""
     from github_checker import prgate
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
 
     # --file-limit/--diff-lines default to None on the parser so prgate's own
     # FILE_LIMIT/DIFF_LINE_LIMIT stay the single source of truth for the
@@ -107,9 +187,9 @@ def _run_pr_detail(args: argparse.Namespace) -> None:
     ):
         if value < 1:
             _emit(
-                ActionResult(
-                    action="pr-detail",
-                    dir=str(args.dir),
+                result_for(
+                    "pr-detail",
+                    args.dir,
                     ok=False,
                     error=f"{flag} must be >= 1, got {value}",
                 )
@@ -124,27 +204,21 @@ def _run_pr_detail(args: argparse.Namespace) -> None:
             diff_line_limit=diff_line_limit,
         )
     except prgate.GateUnavailable as err:
-        _emit(
-            ActionResult(
-                action="pr-detail", dir=str(args.dir), ok=False, error=str(err)
-            )
-        )
+        _emit(result_for("pr-detail", args.dir, ok=False, error=str(err)))
         return
-    _emit(
-        ActionResult(action="pr-detail", dir=str(args.dir), ok=True, pr_detail=detail)
-    )
+    _emit(result_for("pr-detail", args.dir, ok=True, pr_detail=detail))
 
 
 def _run_merge(args: argparse.Namespace) -> None:
     """Squash-merge one PR behind the fail-closed gate."""
     from github_checker import prgate
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
 
     if not args.if_head:
         _emit(
-            ActionResult(
-                action="merge",
-                dir=str(args.dir),
+            result_for(
+                "merge",
+                args.dir,
                 ok=False,
                 merged=False,
                 # Every other merge refusal goes through prgate._merge_failure,
@@ -179,17 +253,12 @@ def _run_post_merge_sync(args: argparse.Namespace) -> None:
 
 def _run_issue_lookup(args: argparse.Namespace) -> None:
     """Find inbox issues claiming a slug; print the JSON result."""
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
     from github_checker.issues import issue_lookup
 
     if not args.slug:
         _emit(
-            ActionResult(
-                action="issue-lookup",
-                dir=str(args.dir),
-                ok=False,
-                error="--slug is required",
-            )
+            result_for("issue-lookup", args.dir, ok=False, error="--slug is required")
         )
         return
     _emit(issue_lookup(args.dir, args.slug))
@@ -197,14 +266,14 @@ def _run_issue_lookup(args: argparse.Namespace) -> None:
 
 def _run_issue_create(args: argparse.Namespace) -> None:
     """Create an inbox issue from validated parts plus a prose file."""
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
     from github_checker.issues import issue_create
 
     def refuse(error: str) -> None:
         _emit(
-            ActionResult(
-                action="issue-create",
-                dir=str(args.dir),
+            result_for(
+                "issue-create",
+                args.dir,
                 ok=False,
                 created=False,
                 error=error,
@@ -259,7 +328,7 @@ def _dispatch_guarded(
     bug into a quieter failure. The exception type stays in `error` so it's
     still diagnosable, not just swallowed.
     """
-    from github_checker.actions import ActionResult
+    from github_checker.actions import result_for
 
     try:
         handler()
@@ -273,19 +342,159 @@ def _dispatch_guarded(
         # The frame list belongs on stderr, outside the stdout JSON contract:
         # it keeps the bug locatable without adding a second shape to stdout.
         traceback.print_exc()
+        # Built through result_for: an unhandled exception means this verb's
+        # own fields are *unknown*, not inapplicable. Emitting a bare
+        # envelope would tell the consumer the verb has no concept of, say,
+        # `merged` — when the truth is that we cannot say what happened.
         _emit(
-            ActionResult(
-                action=action,
-                dir=str(directory),
+            result_for(
+                action,
+                directory,
                 ok=False,
                 error=f"{type(err).__name__}: {err}",
             )
         )
 
 
-def main() -> None:
-    """Parse args and dispatch: TUI (default) or headless snapshot/actions."""
-    parser = argparse.ArgumentParser(
+# Every verb that prints an ActionResult. `snapshot` is deliberately absent:
+# it has its own shape, and the TUI has none at all.
+ACTION_VERBS = (
+    "pull",
+    "open-pr",
+    "propose-pr",
+    "pr-detail",
+    "merge",
+    "post-merge-sync",
+    "issue-lookup",
+    "issue-create",
+)
+
+
+class _ArgvRefused(Exception):
+    """argparse rejected argv before any handler could run."""
+
+
+class _JsonParser(argparse.ArgumentParser):
+    """An ArgumentParser that refuses through the JSON contract.
+
+    argparse's own `error()` writes usage to stderr and calls `exit(2)`,
+    printing no JSON at all — so a value beginning with `-` (`--slug --from`),
+    an unknown verb, a missing or extra positional each bypassed every
+    handler's validation and broke the "exactly one JSON on stdout" contract
+    that machine consumers depend on. `error()` is the single funnel for all
+    of them; `--help` goes through `exit()` instead and is untouched.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        raise _ArgvRefused(message)
+
+
+def value_taking_options(parser: argparse.ArgumentParser) -> set[str]:
+    """Every option string that consumes a following argument.
+
+    Walked out of the parser rather than hand-listed. A copied list is a
+    claim about the parser that the parser never checks: the previous
+    version promised "every value-taking flag", already missed
+    `snapshot --workspace`, and the tests that were meant to prove it drew
+    their cases from that same list — unverifiable by construction.
+    """
+    found: set[str] = set()
+    stack = [parser]
+    while stack:
+        current = stack.pop()
+        for action in current._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                stack.extend(action.choices.values())
+                continue
+            # nargs == 0 is store_true/store_const: no value follows
+            if action.option_strings and action.nargs != 0:
+                found.update(action.option_strings)
+    return found
+
+
+def resolve_option(token: str, known: set[str]) -> str | None:
+    """The option `token` names, honouring argparse's prefix abbreviation.
+
+    `--conf` is `--config` to argparse, so a scanner matching literally
+    would let the abbreviation's value through as a positional.
+    """
+    if token in known:
+        return token
+    if not token.startswith("--"):
+        return None
+    candidates = [name for name in known if name.startswith(token)]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _refuse_argv(
+    argv: list[str], message: str, *, value_taking: set[str] | None = None
+) -> None:
+    """Emit the JSON refusal argparse would otherwise have skipped.
+
+    Built directly rather than through `result_for`: this is the
+    pre-dispatch variant, whose point is that no verb field has a value
+    yet — not even an unknown one. Filling the attempted verb's set with
+    nulls would claim more than we know.
+    """
+    from github_checker.actions import (
+        KIND_CLI_ERROR,
+        SCHEMA_VERSION,
+        ActionResult,
+    )
+
+    # The verb is the first positional — but an option's value is a
+    # positional-looking token too and would be mistaken for it. Scanning
+    # for "a token that looks like a verb" instead is worse: it reads verb
+    # names out of option VALUES, so a typo'd verb with `--slug merge` would
+    # be reported as `merge`.
+    #
+    # The option set is derived from the parser, never hand-listed and never
+    # defaulted to a literal: a copied list is a claim about the parser that
+    # the parser never checks, and the previous one already missed
+    # `snapshot --workspace`.
+    known = (
+        value_taking
+        if value_taking is not None
+        else value_taking_options(build_parser())
+    )
+    positional: list[str] = []
+    skip = False
+    for token in argv:
+        if skip:
+            skip = False
+            continue
+        if resolve_option(token, known) is not None:
+            skip = True
+            continue
+        if token.startswith("-"):
+            continue
+        positional.append(token)
+    verb = positional[0] if positional else ""
+    rest = positional[1:]
+    _emit(
+        ActionResult(
+            # both discriminators explicitly: exclude_unset drops whatever a
+            # call site did not set, and an envelope without its version is
+            # exactly what a consumer must never have to guess at
+            schema_version=SCHEMA_VERSION,
+            result_kind=KIND_CLI_ERROR,
+            # `action` is best-effort: an unknown verb is reported as given,
+            # so a consumer probing for a verb this version lacks sees which
+            # one was refused rather than a blank.
+            action=verb or "unknown",
+            dir=rest[0] if rest else "",
+            ok=False,
+            error=f"invalid command line: {message}",
+        ),
+        pre_dispatch=True,
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The full CLI parser. Extracted so it can be inspected — the argv
+    scanner derives its value-taking option set from here rather than from
+    a hand-copied list that nothing checks."""
+    parser = _JsonParser(
         prog="github-checker",
         description="TUI monitor for multiple GitHub repositories.",
     )
@@ -424,7 +633,17 @@ def main() -> None:
         help="file holding the prose; the structural block is built for you",
     )
 
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    """Parse args and dispatch: TUI (default) or headless snapshot/actions."""
+    parser = build_parser()
+    try:
+        args = parser.parse_args()
+    except _ArgvRefused as err:
+        _refuse_argv(sys.argv[1:], str(err), value_taking=value_taking_options(parser))
+        return
     if args.command == "snapshot":
         _run_snapshot(args.workspace, args.local_only, args.indent or None)
     elif args.command in ("pull", "open-pr"):

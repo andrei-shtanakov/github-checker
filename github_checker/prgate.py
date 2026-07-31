@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from github_checker.actions import ActionResult
+from github_checker.actions import ActionResult, result_for
 from github_checker.ghcli import repo_slug, run_gh
 from github_checker.models import (
     ChangedFile,
@@ -335,15 +335,25 @@ def _merge_failure(
     path: Path,
     error: str,
     *,
+    merged: bool | None = False,
     gate_failed: list[str] | None = None,
     detail: PrDetail | None = None,
 ) -> ActionResult:
-    """One shape for every `merge` refusal, so no field can go missing."""
-    return ActionResult(
-        action="merge",
-        dir=str(path),
+    """One shape for every `merge` refusal, so no field can go missing.
+
+    `merged` defaults to `False` because every *pre-launch* refusal knows
+    for certain that nothing was merged. The one caller that runs after
+    `gh pr merge` has already been launched must pass `merged=None`
+    instead: a non-zero exit there does not prove the merge did not
+    happen. `--delete-branch` runs *after* the merge (gh's own wording),
+    so a protected branch, a permissions problem or a dropped connection
+    exits non-zero with the pull request already squashed.
+    """
+    return result_for(
+        "merge",
+        path,
         ok=False,
-        merged=False,
+        merged=merged,
         local_sync="not_attempted",
         gate_failed=gate_failed,
         error=error,
@@ -380,13 +390,24 @@ def merge_pr(
         str(number),
         "--squash",
         "--delete-branch",
+        # Server-side TOCTOU enforcement. The `head_sha` comparison above is
+        # a local read and cannot bind: a push landing between that read and
+        # this call would merge something the operator never saw. GitHub
+        # rejects the merge itself when the head has moved, which is the only
+        # place the check can be authoritative.
+        "--match-head-commit",
+        if_head,
         binary=binary,
     )
     if proc.returncode != 0:
-        return _merge_failure(path, proc.stderr.strip() or "gh pr merge failed")
-    return ActionResult(
-        action="merge",
-        dir=str(path),
+        # Past the point of no return: `gh` has been launched, so a non-zero
+        # exit does not prove nothing happened. `merged=None` — unknown.
+        return _merge_failure(
+            path, proc.stderr.strip() or "gh pr merge failed", merged=None
+        )
+    return result_for(
+        "merge",
+        path,
         ok=True,
         merged=True,
         # `merge` never touches the local clone; say so rather than leaving

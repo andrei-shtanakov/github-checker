@@ -119,13 +119,44 @@ def test_unavailable_state_refuses(monkeypatch) -> None:
     assert "gh api graphql failed" in (result.error or "")
 
 
-def test_gh_merge_failure_reports_and_does_not_claim_merged(patched) -> None:
+def test_gh_merge_failure_leaves_merged_unknown_not_false(patched) -> None:
+    """A non-zero exit from `gh pr merge` does not prove nothing happened.
+
+    The stderr here is the case exactly: `--delete-branch` runs *after* the
+    merge, so a protected branch fails the deletion while the pull request
+    is already squashed. `merged=False` would be an assertion we cannot
+    make; `None` says "unknown", and the caller's only safe move is to
+    look again rather than merge again.
+    """
     rec = Recorder(returncode=1, stderr="Protected branch update failed")
     patched(make_detail(), rec)
     result = merge_pr(Path("/repo"), 7, if_head=HEAD)
     assert result.ok is False
-    assert result.merged is False
+    assert result.merged is None
+    assert result.local_sync == "not_attempted"
     assert "Protected branch" in (result.error or "")
+
+
+def test_pre_launch_refusals_still_say_merged_false(patched) -> None:
+    """Before `gh` is launched we know for certain nothing was merged —
+    `None` there would throw away information the caller can act on."""
+    rec = Recorder(returncode=0)
+    patched(make_detail(state="CLOSED"), rec)
+    result = merge_pr(Path("/repo"), 7, if_head=HEAD)
+    assert result.ok is False
+    assert result.merged is False, "a gate refusal is a definite negative"
+
+
+def test_merge_binds_the_head_sha_server_side(patched) -> None:
+    """The local `head_sha` comparison cannot bind: a push landing between
+    that read and the merge would merge something never reviewed. GitHub
+    rejecting the merge itself is the only authoritative check."""
+    rec = Recorder(returncode=0)
+    patched(make_detail(), rec)
+    merge_pr(Path("/repo"), 7, if_head=HEAD)
+    argv = " ".join(rec.calls[-1])
+    assert "--match-head-commit" in argv
+    assert HEAD in argv
 
 
 def test_malformed_pr_view_payload_refuses_without_calling_gh(monkeypatch) -> None:

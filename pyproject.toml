@@ -20,6 +20,7 @@ github-checker = "github_checker.main:main"
 [dependency-groups]
 dev = [
     "anyio>=4.14.1",
+    "jsonschema>=4.26.0",
     "pyrefly>=1.1.1",
     "pytest>=9.1.1",
     "ruff>=0.15.20",
