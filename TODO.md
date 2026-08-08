@@ -100,7 +100,7 @@
       замораживать envelope поверх пути, который его нарушает, значит издать
       заведомо ложный контракт.
 
-- [ ] `ISSUE_LIST_LIMIT = 200` — медленный фитиль, не сегодняшний баг @id:issue-list-limit-fuse
+- [ ] `ISSUE_LIST_LIMIT = 200` — медленный фитиль, не сегодняшний баг @owner:repo:github-checker @trigger:"the inbox issue count in a repository approaches 200" @id:issue-list-limit-fuse
       Список читается с `--state all`, а значит монотонно растёт: закрытые
       inbox-issue из него никогда не выпадают. Когда число `inbox`-issue в
       репо перевалит за 200, guard truncation (см. `issue-lookup` выше)
