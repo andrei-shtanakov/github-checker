@@ -15,11 +15,22 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Sta
 from github_checker import localgit
 from github_checker.config import add_repo, load_config, remove_repo, set_path
 from github_checker.github import fetch_all
-from github_checker.models import LocalStatus, RepoRef, RepoState, RulesetInfo
+from github_checker.models import Issue, LocalStatus, RepoRef, RepoState, RulesetInfo
 from github_checker.protection import ProtectionScreen
 
-COLUMNS = ("Repo", "PRs", "Bot", "Branches", "Alerts", "Rules", "Copilot", "Updated")
+COLUMNS = (
+    "Repo",
+    "PRs",
+    "Bot",
+    "Issues",
+    "Branches",
+    "Alerts",
+    "Rules",
+    "Copilot",
+    "Updated",
+)
 GITHUB_URL = "https://github.com/{name}"
+INBOX_LABEL = "inbox"
 
 _COPILOT_STATE_LABELS = {
     "APPROVED": "approved",
@@ -44,10 +55,19 @@ def rules_cell(rulesets: list[RulesetInfo] | None) -> str:
     return "-"
 
 
-def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str, str]:
+def issues_cell(issues: list[Issue] | None) -> str:
+    """Issues column value: count plus '(M inbox)' when inbox-labelled, '-' unknown."""
+    if issues is None:
+        return "-"
+    inbox = sum(1 for issue in issues if INBOX_LABEL in issue.labels)
+    total = _count(len(issues))
+    return f"{total} ({inbox} inbox)" if inbox else total
+
+
+def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str, str, str]:
     """Build one table row for a repository."""
     if state.error:
-        return (state.name, "-", "-", "-", "-", "-", "-", "error")
+        return (state.name, "-", "-", "-", "-", "-", "-", "-", "error")
     bot = sum(1 for p in state.pulls if p.is_dependabot)
     with_copilot = sum(1 for p in state.pulls if p.copilot_review)
     alerts = "n/a" if state.alerts is None else _count(state.alerts)
@@ -56,6 +76,7 @@ def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str, str]:
         state.name,
         _count(len(state.pulls)),
         str(bot),
+        issues_cell(state.issues),
         _count(len(state.branches)),
         alerts,
         rules_cell(state.rulesets),
@@ -103,6 +124,15 @@ def details_text(state: RepoState) -> str:
             )
             badges += f" [copilot: {label} ({pull.copilot_review.comment_count})]"
         lines.append(f"  #{pull.number} {pull.title} ({pull.author}){badges}")
+    lines += ["", "Issues:"]
+    if state.issues is None:
+        lines.append("  (no data)")
+    elif not state.issues:
+        lines.append("  (none)")
+    else:
+        for issue in state.issues:
+            labels = f" [{', '.join(issue.labels)}]" if issue.labels else ""
+            lines.append(f"  #{issue.number} {issue.title} ({issue.author}){labels}")
     lines += ["", "Branches:"]
     if not state.branches:
         lines.append("  (none)")
