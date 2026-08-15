@@ -17,6 +17,7 @@ from github_checker.models import (
     Branch,
     Config,
     CopilotReview,
+    Issue,
     LocalStatus,
     PullRequest,
     RepoRef,
@@ -54,6 +55,7 @@ def test_repo_row_normal() -> None:
         "o/r",
         "2",
         "1",
+        "-",
         "2",
         "n/a",
         "?",
@@ -64,7 +66,7 @@ def test_repo_row_normal() -> None:
 
 def test_repo_row_error() -> None:
     state = RepoState(name="o/bad", error="HTTP 404: Not Found")
-    assert repo_row(state) == ("o/bad", "-", "-", "-", "-", "-", "-", "error")
+    assert repo_row(state) == ("o/bad", "-", "-", "-", "-", "-", "-", "-", "error")
 
 
 def test_repo_row_caps_at_100() -> None:
@@ -73,7 +75,34 @@ def test_repo_row_caps_at_100() -> None:
         branches=[Branch(name=f"b{i}") for i in range(100)],
         updated_at=datetime(2026, 7, 5, 12, 0, 0),
     )
-    assert repo_row(state)[3] == "100+"
+    assert repo_row(state)[4] == "100+"
+
+
+def test_issues_cell_variants() -> None:
+    from github_checker.app import issues_cell
+
+    plain = Issue(number=1, title="Bug", author="me")
+    inbox = Issue(number=2, title="Inbox item", author="me", labels=["inbox"])
+    assert issues_cell(None) == "-"
+    assert issues_cell([]) == "0"
+    assert issues_cell([plain]) == "1"
+    assert issues_cell([plain, inbox]) == "2 (1 inbox)"
+    many_inbox = [
+        Issue(number=n, title="t", author="a", labels=["inbox"]) for n in range(100)
+    ]
+    assert issues_cell(many_inbox) == "100+ (100+ inbox)"
+
+
+def test_repo_row_issues_column() -> None:
+    state = STATE.model_copy(
+        update={
+            "issues": [
+                Issue(number=1, title="Bug", author="me"),
+                Issue(number=2, title="Inbox item", author="me", labels=["inbox"]),
+            ]
+        }
+    )
+    assert repo_row(state)[3] == "2 (1 inbox)"
 
 
 def test_details_text() -> None:
@@ -81,6 +110,34 @@ def test_details_text() -> None:
     assert "#42 Add feature X (me) [copilot: commented (2)]" in text
     assert "#43 Bump httpx (dependabot[bot]) [dbot]" in text
     assert "master" in text
+
+
+def test_details_text_issues_section() -> None:
+    state = STATE.model_copy(
+        update={
+            "issues": [
+                Issue(number=7, title="Broken build", author="me"),
+                Issue(
+                    number=9,
+                    title="Triage me",
+                    author="bot",
+                    labels=["inbox", "bug"],
+                ),
+            ]
+        }
+    )
+    text = details_text(state)
+    assert "Issues:" in text
+    assert "#7 Broken build (me)" in text
+    assert "#9 Triage me (bot) [inbox, bug]" in text
+
+
+def test_details_text_issues_none_and_empty() -> None:
+    assert "(no data)" in details_text(STATE)  # issues is None
+    empty = STATE.model_copy(update={"issues": []})
+    text = details_text(empty)
+    assert "Issues:" in text
+    assert "(none)" in text
 
 
 def test_details_text_error() -> None:
@@ -235,7 +292,7 @@ def test_rules_cell_variants() -> None:
 
 def test_repo_row_rules_column() -> None:
     state = STATE.model_copy(update={"rulesets": [_ri(1, "active")]})
-    assert repo_row(state)[5] == "✓1"
+    assert repo_row(state)[6] == "✓1"
 
 
 @pytest.mark.anyio
