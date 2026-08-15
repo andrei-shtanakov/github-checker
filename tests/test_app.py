@@ -87,6 +87,10 @@ def test_issues_cell_variants() -> None:
     assert issues_cell([]) == "0"
     assert issues_cell([plain]) == "1"
     assert issues_cell([plain, inbox]) == "2 (1 inbox)"
+    many_inbox = [
+        Issue(number=n, title="t", author="a", labels=["inbox"]) for n in range(100)
+    ]
+    assert issues_cell(many_inbox) == "100+ (100+ inbox)"
 
 
 def test_repo_row_issues_column() -> None:

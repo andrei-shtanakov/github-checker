@@ -61,7 +61,7 @@ def issues_cell(issues: list[Issue] | None) -> str:
         return "-"
     inbox = sum(1 for issue in issues if INBOX_LABEL in issue.labels)
     total = _count(len(issues))
-    return f"{total} ({inbox} inbox)" if inbox else total
+    return f"{total} ({_count(inbox)} inbox)" if inbox else total
 
 
 def repo_row(state: RepoState) -> tuple[str, str, str, str, str, str, str, str, str]:
