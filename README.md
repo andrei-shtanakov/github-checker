@@ -1,7 +1,8 @@
 # github-checker
 
 TUI-дашборд состояния нескольких GitHub-репозиториев: открытые PRы
-(с пометкой dependabot), ветки, security alerts и статус Copilot-ревью.
+(с пометкой dependabot), открытые issues (со счётчиком метки `inbox`),
+ветки, security alerts, rulesets и статус Copilot-ревью.
 
 ## Требования
 
