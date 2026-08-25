@@ -74,6 +74,30 @@
       потребителя. (3) Потребитель может завендорить и запинить копию — контракт
       самодостаточен (схема + фикстуры), без чтения путей вне репо.
 
+- [ ] `snapshot/v2`: классификация эпика на `Issue`/`PullRequest` + окно атрибуции смерженных PR @owner:github:andrei-shtanakov @id:snapshot-v2-epics
+      Принятый inbox-запрос — issue #23 (ADR-ECO-010, эпики/классы дефектов).
+      Мотив: dispatcher не ходит в GitHub API (ADR-ECO-004 D1), robin читает
+      git-зеркала — эпики открытых issue/PR и связь `commit → PR` попадают к ним
+      только через наш снапшот. Публикуем **не сырые тела** (объём, PII,
+      prompt-injection), а нормализованный вердикт по `classification.schema.json`
+      контракта `epics/v1` (вендорится пиненой копией; грамматика эпика/дефекта
+      компилируется из завендоренной копии — приём как в
+      `dispatcher/packages/plan-fields/src/plan_fields/epic.py`): поля
+      `epic`/`defect`/`diagnostics` и закрытая четвёрка
+      `classification: tagged|missing|invalid|unavailable` — четырёхзначная
+      именно потому, что `epic: null` не различает «не собирали», «тега нет»,
+      «тело усечено» и «парсер упал». Вторая секция — атрибуция смерженных PR
+      за окно ~30 дней: `number`, `merge_commit_sha`, `commit_shas`,
+      нормализованные `epic`/`defect`/`classification`, `merged_at`, плюс явные
+      `window_days` и `truncated`, чтобы усечение окна не читалось как пустота.
+      В сам контракт записать границу потребления: dispatcher берёт только
+      открытые issues/PR; окно атрибуции — транспорт для robin, не «состояние».
+      Приёмка (из issue): `contracts/snapshot/v2/` со схемой и фикстурами,
+      включая случай `unavailable`; классификация на `Issue` и `PullRequest`;
+      секция атрибуции с `window_days`/`truncated`; `unavailable` никогда не
+      сворачивается в `missing`; версия контракта поднята — v1 остаётся живым
+      для текущих потребителей до их миграции.
+
 ## Известные дефекты
 
 - [x] `argparse` ломает JSON-контракт на значениях флагов, начинающихся с `-` @id:argparse-dash-values
