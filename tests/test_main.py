@@ -528,3 +528,105 @@ def test_help_still_exits_zero_without_json(monkeypatch, capsys) -> None:
         main_module.main()
     assert exit_info.value.code == 0
     assert "usage:" in capsys.readouterr().out
+
+
+class _FakeSnapshot:
+    def __init__(self, payload: str) -> None:
+        self._payload = payload
+
+    def model_dump_json(self, indent: int | None = None) -> str:
+        return self._payload
+
+
+def test_snapshot_default_routes_to_v1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple] = []
+
+    async def fake_v1(root: Path, include_github: bool = True) -> _FakeSnapshot:
+        calls.append((root, include_github))
+        return _FakeSnapshot('{"schema_version": 1}')
+
+    monkeypatch.setattr("github_checker.snapshot.build_snapshot", fake_v1)
+    monkeypatch.setattr(
+        "sys.argv", ["github-checker", "snapshot", "--workspace", str(tmp_path)]
+    )
+    assert _main_exit_code() == 0
+    assert json.loads(capsys.readouterr().out) == {"schema_version": 1}
+    assert calls == [(tmp_path, True)]
+
+
+def test_snapshot_schema_version_2_routes_to_v2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple] = []
+
+    async def fake_v2(
+        root: Path, include_github: bool = True, window_days: int = 30
+    ) -> _FakeSnapshot:
+        calls.append((root, include_github, window_days))
+        return _FakeSnapshot('{"schema_version": 2}')
+
+    monkeypatch.setattr("github_checker.snapshot_v2.build_snapshot_v2", fake_v2)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "github-checker",
+            "snapshot",
+            "--workspace",
+            str(tmp_path),
+            "--schema-version",
+            "2",
+            "--window-days",
+            "7",
+        ],
+    )
+    assert _main_exit_code() == 0
+    assert json.loads(capsys.readouterr().out) == {"schema_version": 2}
+    assert calls == [(tmp_path, True, 7)]
+
+
+def test_snapshot_window_days_requires_v2(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "github-checker",
+            "snapshot",
+            "--workspace",
+            str(tmp_path),
+            "--window-days",
+            "7",
+        ],
+    )
+    assert _main_exit_code() == 1
+    assert "--schema-version 2" in capsys.readouterr().err
+
+
+def test_snapshot_window_days_must_be_positive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "github-checker",
+            "snapshot",
+            "--workspace",
+            str(tmp_path),
+            "--schema-version",
+            "2",
+            "--window-days",
+            "0",
+        ],
+    )
+    assert _main_exit_code() == 1
+    assert "--window-days" in capsys.readouterr().err

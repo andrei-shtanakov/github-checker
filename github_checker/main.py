@@ -39,15 +39,47 @@ def _run_tui(config: Path | None) -> None:
     GithubCheckerApp(config_path).run()
 
 
-def _run_snapshot(workspace: Path, local_only: bool, indent: int | None) -> None:
-    """Print a WorkspaceSnapshot as JSON; degrades gracefully without gh."""
-    from github_checker.snapshot import build_snapshot
+def _run_snapshot(
+    workspace: Path,
+    local_only: bool,
+    indent: int | None,
+    schema_version: int,
+    window_days: int | None,
+) -> None:
+    """Print a WorkspaceSnapshot as JSON; degrades gracefully without gh.
 
+    v1 stays the default until its consumers migrate: emitting v2 is an
+    explicit opt-in (`--schema-version 2`), never a silent flag-day.
+    """
     if not workspace.is_dir():
         print(f"Не каталог: {workspace}", file=sys.stderr)
         raise SystemExit(1)
-    snapshot = asyncio.run(build_snapshot(workspace, include_github=not local_only))
-    print(snapshot.model_dump_json(indent=indent))
+    if schema_version == 1:
+        if window_days is not None:
+            print("--window-days требует --schema-version 2", file=sys.stderr)
+            raise SystemExit(1)
+        from github_checker.snapshot import build_snapshot
+
+        snapshot = asyncio.run(build_snapshot(workspace, include_github=not local_only))
+        print(snapshot.model_dump_json(indent=indent))
+        return
+    from github_checker.snapshot_v2 import WINDOW_DAYS_DEFAULT, build_snapshot_v2
+
+    if window_days is not None and window_days < 1:
+        print(
+            f"--window-days должен быть >= 1, получено {window_days}", file=sys.stderr
+        )
+        raise SystemExit(1)
+    snapshot_v2 = asyncio.run(
+        build_snapshot_v2(
+            workspace,
+            include_github=not local_only,
+            window_days=(
+                window_days if window_days is not None else WINDOW_DAYS_DEFAULT
+            ),
+        )
+    )
+    print(snapshot_v2.model_dump_json(indent=indent))
 
 
 # A refusal raised before the verb ever ran: argv could not be parsed, so no
@@ -526,6 +558,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="JSON indent, 0 for compact (default: 2)",
     )
+    snap.add_argument(
+        "--schema-version",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help=(
+            "snapshot contract version to emit (default: 1; 2 adds epics/v1 "
+            "classification and the merged-PR attribution window)"
+        ),
+    )
+    snap.add_argument(
+        "--window-days",
+        type=int,
+        default=None,
+        help="merged-PR attribution window for --schema-version 2 (default: 30)",
+    )
     for name, help_text in (
         ("pull", "fast-forward pull of one repo (headless twin of TUI key S)"),
         ("open-pr", "create (or report) a PR for the repo's current branch"),
@@ -645,7 +693,13 @@ def main() -> None:
         _refuse_argv(sys.argv[1:], str(err), value_taking=value_taking_options(parser))
         return
     if args.command == "snapshot":
-        _run_snapshot(args.workspace, args.local_only, args.indent or None)
+        _run_snapshot(
+            args.workspace,
+            args.local_only,
+            args.indent or None,
+            args.schema_version,
+            args.window_days,
+        )
     elif args.command in ("pull", "open-pr"):
         _dispatch_guarded(
             args.command, args.dir, lambda: _run_action(args.command, args.dir)
