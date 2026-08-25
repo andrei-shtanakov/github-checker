@@ -1,0 +1,7 @@
+source: prograph-vault authored/contracts/epics/v1
+commit: 15cd338e01176fd126a7e8b8925c88ada8bface6
+vendored: 2026-08-25
+note: pinned copy (repo-boundaries vendoring). Do not edit here; re-vendor from
+  the pin. github_checker/epics.py compiles the epic/defect grammar from this
+  copy (executable delegation, same idiom as dispatcher's plan-fields), and the
+  snapshot/v2 conformance tests replay the pull_request/issue fixtures.
