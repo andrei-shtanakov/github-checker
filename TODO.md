@@ -60,7 +60,7 @@
 
 ## Кросс-репные контракты
 
-- [ ] Опубликовать `contracts/actions/v1` — версионировать поведение headless-действий как контракт @owner:github:andrei-shtanakov @id:contracts-actions-v1
+- [ ] Опубликовать `contracts/actions/v1` — версионировать поведение headless-действий как контракт @owner:github:andrei-shtanakov @id:contracts-actions-v1 @epic:eco.tooling
       Ретроактивное принятие запроса dispatcher (`dispatcher/TODO.md`, пункт
       `vendor-contracts-actions-v1`, follow-up PR #40 у них): dispatcher ждёт, чтобы
       завендорить пиненую копию, а контракт до сих пор существует только как поведение
@@ -126,7 +126,7 @@
       замораживать envelope поверх пути, который его нарушает, значит издать
       заведомо ложный контракт.
 
-- [ ] `ISSUE_LIST_LIMIT = 200` — медленный фитиль, не сегодняшний баг @owner:repo:github-checker @trigger:"the inbox issue count in a repository approaches 200" @id:issue-list-limit-fuse
+- [ ] `ISSUE_LIST_LIMIT = 200` — медленный фитиль, не сегодняшний баг @owner:repo:github-checker @trigger:"the inbox issue count in a repository approaches 200" @id:issue-list-limit-fuse @epic:eco.tooling
       Список читается с `--state all`, а значит монотонно растёт: закрытые
       inbox-issue из него никогда не выпадают. Когда число `inbox`-issue в
       репо перевалит за 200, guard truncation (см. `issue-lookup` выше)
