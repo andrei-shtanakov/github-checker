@@ -18,6 +18,7 @@ TUI-дашборд состояния нескольких GitHub-репозит
 
     uv run github-checker snapshot --workspace ..              # весь polyrepo-workspace
     uv run github-checker snapshot --workspace .. --local-only # без GitHub API
+    uv run github-checker snapshot --workspace .. --schema-version 2  # + эпики/атрибуция
 
 Обходит `<workspace>/*/.git` (конфиг не нужен) и печатает JSON: локальный
 git-статус каждого репо (ветка, ahead/behind, dirty) плюс, если `gh`
@@ -201,6 +202,27 @@ success case.
   замороженным файлом, молчаливый drift невозможен;
 - breaking-изменение — только как `contracts/snapshot/v2/` рядом с v1,
   никогда правкой v1.
+
+### Snapshot-контракт v2 (эпики + атрибуция)
+
+`snapshot --schema-version 2` эмитит `contracts/snapshot/v2/` — v1-плоскости
+плюс два добавления (запрос issue #23, ADR-ECO-010):
+
+- **`epic` на каждом открытом `Issue`/`PullRequest`** — нормализованный
+  объект `epics/v1` (`classification`: закрытая четвёрка
+  `tagged | missing | invalid | unavailable`; `unavailable` никогда не
+  сворачивается в `missing`). Сырые тела в снапшот не попадают — только
+  вердикт. Грамматика компилируется из вендоренной копии контракта
+  (`github_checker/contract_epics/`, целостность — guarantee A в CI);
+  принадлежность реестру (EP-UNKNOWN/EP-MOVED) — слой потребителя.
+- **`merged` — окно атрибуции смерженных PR** (`--window-days`, дефолт 30):
+  `number`, `merge_commit_sha`, `commit_shas`, `merged_at`, классификация и
+  явные флаги усечения (`truncated`, `commit_shas_truncated`). Граница
+  потребления записана в контракте: dispatcher читает только открытые
+  плоскости, окно — транспорт для robin, не «состояние».
+
+Дефолт CLI остаётся `--schema-version 1`, пока потребители v1 не
+мигрируют: v2 — явный opt-in, не flag-day.
 
 ## Клавиши
 
