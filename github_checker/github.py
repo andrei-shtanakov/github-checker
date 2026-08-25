@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -153,6 +153,35 @@ async def _gh_api(
     return json.loads(stdout)
 
 
+async def copilot_reviews(
+    name: str,
+    numbers: Sequence[int],
+    call: Callable[[str], Awaitable[Any]],
+) -> dict[int, CopilotReview]:
+    """Copilot's latest review per PR number; PRs it never reviewed are absent.
+
+    Shared by the v1 and v2 snapshot fetch paths so the enrichment cannot
+    drift between contracts.
+    """
+    reviews_json = await asyncio.gather(
+        *(call(f"repos/{name}/pulls/{n}/reviews?per_page=100") for n in numbers)
+    )
+    reviewed = [
+        (number, state)
+        for number, reviews in zip(numbers, reviews_json)
+        if (state := copilot_state(reviews)) is not None
+    ]
+    comments_json = await asyncio.gather(
+        *(call(f"repos/{name}/pulls/{n}/comments?per_page=100") for n, _ in reviewed)
+    )
+    return {
+        number: CopilotReview(
+            state=state, comment_count=count_copilot_comments(comments)
+        )
+        for (number, state), comments in zip(reviewed, comments_json)
+    }
+
+
 async def fetch_repo(ref: RepoRef, sem: asyncio.Semaphore) -> RepoState:
     """Fetch full state of one repository; errors go into RepoState.error."""
     name = ref.name
@@ -172,28 +201,9 @@ async def fetch_repo(ref: RepoRef, sem: asyncio.Semaphore) -> RepoState:
             call(f"repos/{name}/branches?per_page=100"),
         )
         pulls = [parse_pull(item) for item in pulls_json]
-        reviews_json = await asyncio.gather(
-            *(
-                call(f"repos/{name}/pulls/{p.number}/reviews?per_page=100")
-                for p in pulls
-            )
-        )
-        reviewed = [
-            (pull, state)
-            for pull, reviews in zip(pulls, reviews_json)
-            if (state := copilot_state(reviews)) is not None
-        ]
-        comments_json = await asyncio.gather(
-            *(
-                call(f"repos/{name}/pulls/{pull.number}/comments?per_page=100")
-                for pull, _ in reviewed
-            )
-        )
-        for (pull, state), comments in zip(reviewed, comments_json):
-            pull.copilot_review = CopilotReview(
-                state=state,
-                comment_count=count_copilot_comments(comments),
-            )
+        by_number = await copilot_reviews(name, [p.number for p in pulls], call)
+        for pull in pulls:
+            pull.copilot_review = by_number.get(pull.number)
         try:
             alerts_json = await call(
                 f"repos/{name}/dependabot/alerts?state=open&per_page=100"
