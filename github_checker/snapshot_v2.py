@@ -191,6 +191,24 @@ def parse_issues_v2(
     ]
 
 
+def _updated_at_inside(item: dict[str, Any], cutoff: datetime) -> bool:
+    """Whether an item's `updated_at` is at/after *cutoff*, failing closed.
+
+    Used only for the truncation verdict: a missing or unparseable timestamp
+    is *unknown*, and unknown must not read as «the window was covered», so
+    both answer True. `merged_at` is deliberately NOT treated this way — it
+    is published data, and a malformed value fails the repo loudly (the
+    per-repo error isolation) rather than being guessed at.
+    """
+    raw = item.get("updated_at")
+    if raw is None:
+        return True
+    try:
+        return datetime.fromisoformat(raw) >= cutoff
+    except ValueError:
+        return True
+
+
 def merged_in_window(
     page: list[dict[str, Any]], cutoff: datetime
 ) -> tuple[list[dict[str, Any]], bool]:
@@ -207,10 +225,7 @@ def merged_in_window(
         for item in page
         if item.get("merged_at") and datetime.fromisoformat(item["merged_at"]) >= cutoff
     ]
-    truncated = False
-    if len(page) >= PAGE_CAP:
-        oldest = page[-1].get("updated_at")
-        truncated = oldest is None or datetime.fromisoformat(oldest) >= cutoff
+    truncated = len(page) >= PAGE_CAP and _updated_at_inside(page[-1], cutoff)
     return merged, truncated
 
 

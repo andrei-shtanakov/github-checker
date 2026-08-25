@@ -224,6 +224,15 @@ def test_merged_in_window_missing_updated_at_fails_closed() -> None:
     assert truncated is True
 
 
+def test_merged_in_window_unparseable_updated_at_fails_closed() -> None:
+    page = [
+        {"number": i, "merged_at": iso(3), "updated_at": iso(3)}
+        for i in range(PAGE_CAP - 1)
+    ] + [{"number": 999, "merged_at": None, "updated_at": "not-a-timestamp"}]
+    _, truncated = merged_in_window(page, CUTOFF)
+    assert truncated is True
+
+
 @pytest.mark.anyio
 async def test_error_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gh, "_gh_api", _fake_gh_api({}))
