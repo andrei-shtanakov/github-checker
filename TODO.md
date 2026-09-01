@@ -102,6 +102,22 @@
 
 ## Известные дефекты
 
+- [x] Сьют падал на чистом раннере: bare-origin в тестах наследовал `init.defaultBranch` @id:test-localgit-ci-env-fragility @epic:eco.tooling
+      Принятый inbox-запрос — issue #35 (от `devtools`, волна CI 2026-09-01,
+      github-checker#34 job `test`). `tests/test_localgit.py` создавал bare-origin
+      как `git init --bare` без `-b`, поэтому его HEAD брался из
+      `init.defaultBranch` хоста. На машине владельца это `main` (Apple-овский
+      system gitconfig), на ubuntu-раннере — `master`: клон такого origin
+      приземлялся на неродившийся `master`, и `git push -q origin main` в
+      `test_pull_ff_only_divergence_raises` падал с `src refspec main does not
+      match any`. Не баг продукта — хрупкость фикстуры к окружению, и именно
+      поэтому она была невидима локально. Починено закреплением ветки в
+      хелпере `_init_bare_origin` (`git init --bare -b main`), три места;
+      идентичности и `receive.denyCurrentBranch` оказались ни при чём (origin
+      bare, identity тесты проставляют сами). Регрессия воспроизводится и
+      проверяется прогоном сьюта с `GIT_CONFIG_SYSTEM`, где
+      `init.defaultBranch = master`. (PR #36)
+
 - [x] `argparse` ломает JSON-контракт на значениях флагов, начинающихся с `-` @id:argparse-dash-values
       Системный, сквозной по всему headless CLI дефект, не специфичный для
       `issue-lookup`/`issue-create`: `argparse` отвергает *любое* значение
