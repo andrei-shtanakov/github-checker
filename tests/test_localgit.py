@@ -38,6 +38,19 @@ def _init_repo(path: Path) -> None:
     _git(path, "commit", "-q", "-m", "init")
 
 
+def _init_bare_origin(path: Path) -> None:
+    """Create a bare origin whose HEAD is pinned to main.
+
+    Without an explicit ``-b`` the branch name comes from the runner's
+    ``init.defaultBranch``. On a host where that is still ``master`` the
+    clone of such an origin lands on an unborn ``master`` and a later
+    ``push origin main`` fails with "src refspec main does not match any"
+    (github-checker#35).
+    """
+    path.mkdir()
+    _git(path, "init", "-q", "--bare", "-b", "main")
+
+
 def test_local_status_missing_path(tmp_path: Path) -> None:
     status = local_status(tmp_path / "nope")
     assert status.error is not None
@@ -69,8 +82,7 @@ def test_local_status_dirty(tmp_path: Path) -> None:
 
 def test_local_status_ahead_of_upstream(tmp_path: Path) -> None:
     origin = tmp_path / "origin.git"
-    origin.mkdir()
-    _git(origin, "init", "-q", "--bare")
+    _init_bare_origin(origin)
     repo = tmp_path / "repo"
     _init_repo(repo)
     _git(repo, "remote", "add", "origin", str(origin))
@@ -92,8 +104,7 @@ def test_fetch_unreachable_remote_raises(tmp_path: Path) -> None:
 
 def test_pull_ff_only_succeeds(tmp_path: Path) -> None:
     origin = tmp_path / "origin.git"
-    origin.mkdir()
-    _git(origin, "init", "-q", "--bare")
+    _init_bare_origin(origin)
     repo = tmp_path / "repo"
     _init_repo(repo)
     _git(repo, "remote", "add", "origin", str(origin))
@@ -133,8 +144,7 @@ def test_is_git_repo_false_for_missing_path(tmp_path: Path) -> None:
 
 def test_pull_ff_only_divergence_raises(tmp_path: Path) -> None:
     origin = tmp_path / "origin.git"
-    origin.mkdir()
-    _git(origin, "init", "-q", "--bare")
+    _init_bare_origin(origin)
     repo = tmp_path / "repo"
     _init_repo(repo)
     _git(repo, "remote", "add", "origin", str(origin))
