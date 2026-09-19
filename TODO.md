@@ -100,6 +100,27 @@
       воркспейсу: 0 ошибок валидации, 837 артефактов — все `missing`, что
       совпадает с baseline «размечено 0» из issue)
 
+- [x] Ре-вендор review-kit до текущего релиза кита @owner:repo:github-checker @id:review-kit-catchup-scope @epic:eco.tooling
+      Принятый inbox-запрос — issue #40 (`slug: review-kit-catchup-scope`, from steward,
+      срез B области ревью, steward#172). Посылка issue («стоим на `e4c43cc`, 6 членов,
+      не хватает двух релизов») к моменту разбора устарела: харнесс-слой
+      (`scripts/review/harness-claude`) уже приехал сюда волной devtools#228 — PR #37
+      (PR-1, инвентарь) и #38 (PR-2, файл и строка PIN). Реально не хватало одного
+      релиза — 2026-09-19: `prose-paths.env`, фильтр области ревью в `local.sh`
+      и код выхода 5 («ревьюировать нечего: всё отфильтровано»).
+      Состав приведён к инвентарю текущего апстрима (`checksum.sh`, §5): 8 членов —
+      7 в `scripts/review/` плюс `.github/codex/review-schema.json`; `prose-paths.env`
+      пока переходный член (`?path`), обязательным станет следующим релизом кита.
+      `install-hook.sh` — известный не-китовый сосед, не вендорится; `.github/hooks/pre-push`
+      в этом репо нет, поэтому правка хука из того же релиза здесь без предмета.
+      Заодно выровнены разъехавшиеся с апстримом режимы: `checksum.sh` и
+      `collect-context.sh` 100755 → 100644 (`cp` бит исполнения не переносит, а для
+      аттестации режим — часть записи).
+      Приёмка: `mode+blob-oid` всех восьми членов совпадают с `steward @ c18bf87`
+      побайтово, `checksum.sh` из апстрима на дереве зелёный (8 файлов) —
+      предъявлено аттестацией целостности `devtools/attest-vendor.sh` от ai-prosto
+      вместо модельного ревью. (PR #41)
+
 ## Известные дефекты
 
 - [x] Сьют падал на чистом раннере: bare-origin в тестах наследовал `init.defaultBranch` @id:test-localgit-ci-env-fragility @epic:eco.tooling
