@@ -127,7 +127,7 @@ def halt_set(
             error=proc.stderr.strip() or f"{method} {endpoint} failed",
             # The write failed, but it may still have landed: say what the
             # read-back saw rather than assuming nothing changed.
-            changed=None if after.state == "unknown" else after.state != before.state,
+            changed=_moved(before, after),
             halt=after,
         )
     ok = after.state == state
@@ -136,9 +136,15 @@ def halt_set(
         path,
         ok=ok,
         error=None if ok else f"wrote {state} but read back {after.state}",
-        changed=after.state != before.state,
+        changed=_moved(before, after),
         halt=after,
     )
+
+
+def _moved(before: HaltStatus, after: HaltStatus) -> bool | None:
+    """Did the read-back state move? None when the read-back is unknown —
+    after a write, an unread state proves nothing either way (review #50)."""
+    return None if after.state == "unknown" else after.state != before.state
 
 
 def read_status(path: Path, slug: str, binary: str) -> HaltStatus:
@@ -192,14 +198,23 @@ def _read(path: Path, slug: str, binary: str) -> tuple[HaltStatus, list[int]]:
 
 
 def _judge(ruleset: dict[str, Any], ruleset_id: int) -> HaltStatus:
-    """Compare one ruleset with the canonical halt; raises on a bad shape."""
+    """Compare one ruleset with the canonical halt.
+
+    Absent parts are read defensively (as github.py does for the same
+    endpoint): a ruleset of that name with no conditions or no rules is not
+    the halt — `misconfigured`, which halt-set can overwrite — never an
+    unreadable `unknown` (review #50).
+    """
     problems: list[str] = []
-    if ruleset["target"] != "branch":
-        problems.append(f"target {ruleset['target']!r}")
-    ref = ruleset["conditions"]["ref_name"]
-    if ref["include"] != ["~DEFAULT_BRANCH"] or ref.get("exclude") not in ([], None):
-        problems.append(f"branch condition {ref}")
-    types = sorted(rule["type"] for rule in ruleset["rules"])
+    if ruleset.get("target") != "branch":
+        problems.append(f"target {ruleset.get('target')!r}")
+    ref = (ruleset.get("conditions") or {}).get("ref_name") or {}
+    if ref.get("include") != ["~DEFAULT_BRANCH"] or ref.get("exclude") not in (
+        [],
+        None,
+    ):
+        problems.append(f"branch condition {ref or 'missing'}")
+    types = sorted(rule.get("type") for rule in ruleset.get("rules") or [])
     if types != ["update"]:
         problems.append(f"rules {types}")
     bypass = ruleset.get("bypass_actors")
@@ -213,7 +228,7 @@ def _judge(ruleset: dict[str, Any], ruleset_id: int) -> HaltStatus:
         return HaltStatus(
             state="misconfigured", ruleset_id=ruleset_id, detail="; ".join(problems)
         )
-    enforcement = ruleset["enforcement"]
+    enforcement = ruleset.get("enforcement")
     if enforcement == "active":
         return HaltStatus(state="on", ruleset_id=ruleset_id)
     if enforcement == "disabled":

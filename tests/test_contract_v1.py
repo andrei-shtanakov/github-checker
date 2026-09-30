@@ -69,6 +69,10 @@ def test_the_load_bearing_nulls_are_present_in_the_fixtures() -> None:
     assert by_name["pr-search-none"]["prs"] == []
     assert by_name["merged-prs-none"]["merges"] == []
     assert by_name["halt-set-on"]["changed"] is True
+    assert by_name["halt-set-refused"]["changed"] is False
+    # halt-read.ok is "read", not "healthy": missing is a successful read.
+    assert by_name["halt-read-missing"]["ok"] is True
+    assert by_name["halt-read-missing"]["halt"]["state"] == "missing"
 
 
 # --- schema <-> emitter parity ----------------------------------------------

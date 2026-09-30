@@ -219,3 +219,48 @@ def test_an_unresolvable_repository_is_unknown(forge, monkeypatch) -> None:
     monkeypatch.setattr("github_checker.halt.repo_slug", lambda *a, **k: None)
     assert _state(halt_read(Path("/r"))) == "unknown"
     assert _state(halt_set(Path("/r"), "on")) == "unknown"
+
+
+def test_a_write_whose_read_back_fails_has_changed_unknown(forge, monkeypatch) -> None:
+    """Review #50: the write landed (rc 0) but the read-back failed — no
+    claim about movement can be made."""
+    f = forge(Forge([_ruleset(enforcement="disabled")]))
+    real = f.__call__
+    wrote = []
+
+    def fail_after_write(path, *args, **kw):
+        if "-X" in args:
+            wrote.append(1)
+            return real(path, *args, **kw)
+        if wrote:
+            return subprocess.CompletedProcess(list(args), 1, "", "HTTP 502")
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr("github_checker.halt.run_gh", fail_after_write)
+    result = halt_set(Path("/r"), "on")
+    assert (result.ok, result.changed, _state(result)) == (False, None, "unknown")
+
+
+@pytest.mark.parametrize(
+    "over",
+    [{"conditions": None}, {"conditions": {}}, {"rules": None}, {"target": None}],
+)
+def test_a_halt_named_ruleset_missing_parts_is_misconfigured(forge, over) -> None:
+    """Review #50: absent parts are not an unreadable answer — and the
+    repair path (halt-set) must then be able to overwrite it."""
+    forge(Forge([_ruleset(**over)]))
+    assert _state(halt_read(Path("/r"))) == "misconfigured"
+    assert _state(halt_set(Path("/r"), "on")) == "on"
+
+
+def test_the_cli_refusal_is_a_definite_no_change(capsys, monkeypatch) -> None:
+    """Review #50: a missing --state ran nothing — changed is False."""
+    import sys
+
+    from github_checker import main as cli
+
+    monkeypatch.setattr(sys, "argv", ["github-checker", "halt-set", "/tmp"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    payload = json.loads(capsys.readouterr().out)
+    assert (payload["ok"], payload["changed"]) == (False, False)

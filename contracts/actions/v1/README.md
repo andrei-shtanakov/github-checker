@@ -33,6 +33,10 @@ The places where `null` is load-bearing:
   mapped).
 - `pr-search.prs`, `merged-prs.merges` — the same rule: `[]` a search read to
   the end that found nothing; `null` a search not read exhaustively.
+- `halt-read.ok` / `halt-set.ok` — `halt-read.ok` means the halt was READ,
+  not that it is healthy: `missing` and `misconfigured` are successful reads
+  (exit 0) of an unhealthy halt. Health is `halt.state` — only `on`/`off`.
+  `halt-set.ok` means the read-back equals the requested state.
 - `halt-set.changed` — `true`/`false` the read-back state moved or not;
   `null` the write failed and the read-back failed too: it may have landed.
   Read the halt again; never assume either way. The halt itself is always

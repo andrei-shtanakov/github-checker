@@ -331,9 +331,15 @@ def _run_halt_set(args: argparse.Namespace) -> None:
     from github_checker.halt import halt_set
 
     if args.state not in ("on", "off"):
+        # A pre-mutation refusal: nothing ran, so `changed` is a definite
+        # False, never the catch-all's "may have landed" null (review #50).
         _emit(
             result_for(
-                "halt-set", args.dir, ok=False, error="--state on|off is required"
+                "halt-set",
+                args.dir,
+                ok=False,
+                error="--state on|off is required",
+                changed=False,
             )
         )
         return
