@@ -28,7 +28,7 @@ from github_checker.localgit import (
     switch_branch,
     worktree_holding,
 )
-from github_checker.models import IssueRef, LocalStatus, PrDetail
+from github_checker.models import IssueRef, LocalStatus, PrDetail, PrRef
 
 
 # contracts/actions/v1 wire discriminators.
@@ -79,6 +79,7 @@ class ActionResult(BaseModel):
     malformed: list[IssueRef] | None = None
     created: bool | None = None
     issue: IssueRef | None = None
+    prs: list[PrRef] | None = None
 
 
 # --- contracts/actions/v1: which fields each verb is *about* -----------------
@@ -135,6 +136,7 @@ ACTION_FIELDS: dict[str, frozenset[str]] = {
     "issue-create": frozenset(
         {"error", "detail", "created", "issue", "matches", "malformed"}
     ),
+    "pr-search": frozenset({"error", "prs"}),
 }
 
 

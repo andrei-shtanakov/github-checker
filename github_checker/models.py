@@ -85,6 +85,22 @@ class IssueRef(BaseModel):
     labels: list[str] = []
 
 
+class PrRef(BaseModel):
+    """One open PR found by `pr-search`, enriched for a human's merge.
+
+    `head_sha`, `head_ref` and `labeled_at` are None when their own read
+    failed — unknown, not absent: the PR itself was found.
+    """
+
+    repo: str  # owner/name
+    number: int
+    title: str
+    url: str
+    head_sha: str | None = None
+    head_ref: str | None = None
+    labeled_at: str | None = None  # the LAST time the label was added
+
+
 class RulesetInfo(BaseModel):
     """Item of GET repos/{r}/rulesets."""
 

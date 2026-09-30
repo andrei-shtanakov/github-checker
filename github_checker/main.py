@@ -296,6 +296,17 @@ def _run_issue_lookup(args: argparse.Namespace) -> None:
     _emit(issue_lookup(args.dir, args.slug))
 
 
+def _run_pr_search(args: argparse.Namespace) -> None:
+    """Find open PRs carrying a label across the clone's owner; print JSON."""
+    from github_checker.actions import result_for
+    from github_checker.prsearch import pr_search
+
+    if not args.label:
+        _emit(result_for("pr-search", args.dir, ok=False, error="--label is required"))
+        return
+    _emit(pr_search(args.dir, args.label))
+
+
 def _run_issue_create(args: argparse.Namespace) -> None:
     """Create an inbox issue from validated parts plus a prose file."""
     from github_checker.actions import result_for
@@ -399,6 +410,7 @@ ACTION_VERBS = (
     "post-merge-sync",
     "issue-lookup",
     "issue-create",
+    "pr-search",
 )
 
 
@@ -681,6 +693,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="file holding the prose; the structural block is built for you",
     )
 
+    search_p = sub.add_parser(
+        "pr-search",
+        help="open PRs carrying a label across this clone's owner; prints JSON",
+    )
+    search_p.add_argument("dir", type=Path, help="path to any local clone of the owner")
+    search_p.add_argument("--label", default=None, help="exact label name")
+
     return parser
 
 
@@ -718,6 +737,8 @@ def main() -> None:
         _dispatch_guarded("issue-lookup", args.dir, lambda: _run_issue_lookup(args))
     elif args.command == "issue-create":
         _dispatch_guarded("issue-create", args.dir, lambda: _run_issue_create(args))
+    elif args.command == "pr-search":
+        _dispatch_guarded("pr-search", args.dir, lambda: _run_pr_search(args))
     else:
         _run_tui(args.config)
 

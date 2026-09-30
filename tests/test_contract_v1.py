@@ -187,6 +187,8 @@ REAL_INVOCATIONS = [
         ],
         1,
     ),
+    # /tmp is not a clone: the owner cannot be resolved, so it refuses.
+    ("pr-search", ["pr-search", "/tmp", "--label", "human-merge-required"], 1),
 ]
 
 
