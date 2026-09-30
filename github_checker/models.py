@@ -101,6 +101,20 @@ class PrRef(BaseModel):
     labeled_at: str | None = None  # the LAST time the label was added
 
 
+class MergedPr(BaseModel):
+    """One PR found by `merged-prs`: when it was merged and by whom.
+
+    `merged_by` is None when the merging account no longer exists.
+    """
+
+    repo: str  # owner/name
+    number: int
+    title: str
+    url: str
+    merged_at: str  # ISO-8601, as GitHub reports it
+    merged_by: str | None = None
+
+
 class RulesetInfo(BaseModel):
     """Item of GET repos/{r}/rulesets."""
 

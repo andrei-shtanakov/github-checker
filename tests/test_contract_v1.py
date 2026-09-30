@@ -189,6 +189,8 @@ REAL_INVOCATIONS = [
     ),
     # /tmp is not a clone: the owner cannot be resolved, so it refuses.
     ("pr-search", ["pr-search", "/tmp", "--label", "human-merge-required"], 1),
+    # A naive --since is refused before any gh call.
+    ("merged-prs", ["merged-prs", "/tmp", "--since", "2026-09-30T00:00:00"], 1),
 ]
 
 
@@ -426,6 +428,7 @@ def test_every_nested_payload_is_closed() -> None:
         "issue_ref",
         "local_status",
         "pr_ref",
+        "merged_pr",
     ):
         assert SCHEMA["$defs"][name]["additionalProperties"] is False, name
 

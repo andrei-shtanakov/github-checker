@@ -307,6 +307,17 @@ def _run_pr_search(args: argparse.Namespace) -> None:
     _emit(pr_search(args.dir, args.label))
 
 
+def _run_merged_prs(args: argparse.Namespace) -> None:
+    """Find PRs merged since a moment across the clone's owner; print JSON."""
+    from github_checker.actions import result_for
+    from github_checker.mergedprs import merged_prs
+
+    if not args.since:
+        _emit(result_for("merged-prs", args.dir, ok=False, error="--since is required"))
+        return
+    _emit(merged_prs(args.dir, args.since))
+
+
 def _run_issue_create(args: argparse.Namespace) -> None:
     """Create an inbox issue from validated parts plus a prose file."""
     from github_checker.actions import result_for
@@ -411,6 +422,7 @@ ACTION_VERBS = (
     "issue-lookup",
     "issue-create",
     "pr-search",
+    "merged-prs",
 )
 
 
@@ -700,6 +712,15 @@ def build_parser() -> argparse.ArgumentParser:
     search_p.add_argument("dir", type=Path, help="path to any local clone of the owner")
     search_p.add_argument("--label", default=None, help="exact label name")
 
+    merged_p = sub.add_parser(
+        "merged-prs",
+        help="PRs merged since a moment across this clone's owner; prints JSON",
+    )
+    merged_p.add_argument("dir", type=Path, help="path to any local clone of the owner")
+    merged_p.add_argument(
+        "--since", default=None, help="timezone-aware ISO-8601 time, e.g. …Z"
+    )
+
     return parser
 
 
@@ -739,6 +760,8 @@ def main() -> None:
         _dispatch_guarded("issue-create", args.dir, lambda: _run_issue_create(args))
     elif args.command == "pr-search":
         _dispatch_guarded("pr-search", args.dir, lambda: _run_pr_search(args))
+    elif args.command == "merged-prs":
+        _dispatch_guarded("merged-prs", args.dir, lambda: _run_merged_prs(args))
     else:
         _run_tui(args.config)
 
