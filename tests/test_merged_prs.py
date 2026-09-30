@@ -124,7 +124,7 @@ def test_non_json_is_unread(monkeypatch) -> None:
 
 def test_malformed_shapes_are_unread(monkeypatch) -> None:
     """A node that is not a PR (`{}`), no pages at all, a non-integer number."""
-    bad_number = _node(1)
+    bad_number: dict[str, object] = dict(_node(1))
     bad_number["number"] = "seven"
     for stdout in ([_page([{}])], [], [_page([bad_number])], [{"errors": []}]):
         _patch(monkeypatch, Gh(stdout))
