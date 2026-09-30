@@ -187,6 +187,8 @@ REAL_INVOCATIONS = [
         ],
         1,
     ),
+    # /tmp is not a clone: the owner cannot be resolved, so it refuses.
+    ("pr-search", ["pr-search", "/tmp", "--label", "human-merge-required"], 1),
 ]
 
 
@@ -423,6 +425,7 @@ def test_every_nested_payload_is_closed() -> None:
         "review_thread",
         "issue_ref",
         "local_status",
+        "pr_ref",
     ):
         assert SCHEMA["$defs"][name]["additionalProperties"] is False, name
 
