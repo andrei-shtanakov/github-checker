@@ -39,7 +39,7 @@ from github_checker.models import IssueRef, LocalStatus, MergedPr, PrDetail, PrR
 # wire drift, and `action` there is diagnostic only.
 SCHEMA_VERSION = 1
 
-KIND_ACTION = "action"  # one of the eight verbs answered
+KIND_ACTION = "action"  # one of the action verbs answered
 KIND_CLI_ERROR = "cli_error"  # argv refused before dispatch; nothing ran
 KIND_CONTRACT_ERROR = "contract_error"  # producer detected its own drift
 

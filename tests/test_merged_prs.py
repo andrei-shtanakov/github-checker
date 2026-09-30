@@ -62,7 +62,10 @@ def test_no_merge_is_a_confirmed_empty_list(monkeypatch) -> None:
     [call] = gh.calls
     assert call[:4] == ("api", "graphql", "--paginate", "--slurp")
     # The window is normalised to UTC for the search qualifier.
-    assert "q=is:pr is:merged user:acme merged:>=2026-09-29T10:00:00Z" in call
+    assert (
+        "q=is:pr is:merged user:acme merged:>=2026-09-29T10:00:00Z sort:created-asc"
+        in call
+    )
 
 
 def test_every_page_is_read_and_the_merger_kept(monkeypatch) -> None:
@@ -89,11 +92,22 @@ def test_fewer_nodes_than_counted_is_unread_not_shorter(monkeypatch) -> None:
     assert "counted 2" in (result.error or "")
 
 
-def test_above_the_search_ceiling_is_unread(monkeypatch) -> None:
-    _patch(monkeypatch, Gh([_page([_node(1)], count=SEARCH_CEILING + 1)]))
+def test_at_or_above_the_search_ceiling_is_unread(monkeypatch) -> None:
+    for count in (SEARCH_CEILING, SEARCH_CEILING + 1):
+        _patch(monkeypatch, Gh([_page([_node(1)], count=count)]))
+        result = merged_prs(Path("/repo"), SINCE)
+        assert (result.ok, result.merges) == (False, None), count
+        assert "ceiling" in (result.error or "")
+
+
+def test_a_repeated_pr_hiding_a_skipped_one_is_unread(monkeypatch) -> None:
+    """Review on #49: pages that repeat #1 and skip #2 still hold as many
+    nodes as the search counted."""
+    pages = [_page([_node(1)], count=2), _page([_node(1)], count=2)]
+    _patch(monkeypatch, Gh(pages))
     result = merged_prs(Path("/repo"), SINCE)
     assert (result.ok, result.merges) == (False, None)
-    assert "ceiling" in (result.error or "")
+    assert "1 distinct" in (result.error or "")
 
 
 def test_a_failed_call_is_unread(monkeypatch) -> None:

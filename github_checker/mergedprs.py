@@ -9,8 +9,10 @@ is the consumer's policy, not this verb's.
 One paginated `gh api graphql` call covers the whole owner. The answer
 follows the issue-lookup idiom: `[]` is a confirmed empty search, and
 anything short of an exhaustive read (a failed call, unparseable output, a
-malformed node, fewer nodes than the search counted, a count above the
-search's 1000-result ceiling) is `merges = None`, never a shorter list.
+malformed node, a set of distinct PRs that differs in size from the search's
+count, a count at or above the search's 1000-result ceiling) is
+`merges = None`, never a shorter list. The search is sorted by creation time,
+not relevance, so its pages are a stable order to walk.
 """
 
 import json
@@ -24,7 +26,8 @@ from github_checker.actions import ActionResult, result_for
 from github_checker.ghcli import repo_slug, run_gh
 from github_checker.models import MergedPr
 
-# GitHub search returns at most this many results however it is paginated.
+# GitHub search returns at most this many results however it is paginated;
+# a count AT the ceiling is treated as possibly truncated (the pr-search idiom).
 SEARCH_CEILING = 1000
 
 QUERY = (
@@ -73,7 +76,7 @@ def merged_prs(path: Path, since: str, *, binary: str = "gh") -> ActionResult:
         "--paginate",
         "--slurp",
         "-f",
-        f"q=is:pr is:merged user:{owner} merged:>={stamp}",
+        f"q=is:pr is:merged user:{owner} merged:>={stamp} sort:created-asc",
         "-f",
         f"query={QUERY}",
         binary=binary,
@@ -122,18 +125,21 @@ def _merges(pages: list[dict[str, Any]]) -> list[MergedPr] | str:
     """
     searches = [page["data"]["search"] for page in pages]
     counted = int(searches[0]["issueCount"])
-    if counted > SEARCH_CEILING:
+    if counted >= SEARCH_CEILING:
         return (
-            f"search counted {counted} merges, above the {SEARCH_CEILING}-result "
-            "ceiling; cannot read them all"
+            f"search counted {counted} merges, at or above the {SEARCH_CEILING}-"
+            "result ceiling; cannot read them all"
         )
-    nodes = [node for search in searches for node in search["nodes"]]
-    if len(nodes) != counted:
+    merges = [_merge(node) for search in searches for node in search["nodes"]]
+    # Distinct PRs, not nodes: a page that repeats one PR and skips another
+    # keeps the node count equal to the search's count (review on #49).
+    distinct = len({(m.repo, m.number) for m in merges})
+    if distinct != counted or distinct != len(merges):
         return (
-            f"search counted {counted} merges but returned {len(nodes)}; "
-            "cannot confirm the read was exhaustive"
+            f"search counted {counted} merges but returned {len(merges)} "
+            f"({distinct} distinct); cannot confirm the read was exhaustive"
         )
-    return [_merge(node) for node in nodes]
+    return merges
 
 
 def _merge(node: dict[str, Any]) -> MergedPr:

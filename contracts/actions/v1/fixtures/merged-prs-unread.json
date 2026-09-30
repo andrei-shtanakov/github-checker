@@ -4,6 +4,6 @@
   "action": "merged-prs",
   "dir": "/repos/widget",
   "ok": false,
-  "error": "search counted 3 merges but returned 2; cannot confirm the read was exhaustive",
+  "error": "search counted 3 merges but returned 3 (2 distinct); cannot confirm the read was exhaustive",
   "merges": null
 }
