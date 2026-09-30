@@ -13,9 +13,16 @@ GH_TIMEOUT = 60
 
 
 def run_gh(
-    path: Path, *args: str, binary: str = "gh", timeout: int = GH_TIMEOUT
+    path: Path,
+    *args: str,
+    binary: str = "gh",
+    timeout: int = GH_TIMEOUT,
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run gh in *path*; never raises — failures surface as returncode 127."""
+    """Run gh in *path*; never raises — failures surface as returncode 127.
+
+    *stdin* feeds a request body (`gh api --input -`) without a temp file.
+    """
     try:
         return subprocess.run(
             [binary, *args],
@@ -23,6 +30,7 @@ def run_gh(
             capture_output=True,
             text=True,
             timeout=timeout,
+            input=stdin,
         )
     except (OSError, subprocess.TimeoutExpired) as err:
         # OSError (not just FileNotFoundError): a huge --body argv can hit

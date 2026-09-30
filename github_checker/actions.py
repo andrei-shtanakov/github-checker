@@ -28,7 +28,14 @@ from github_checker.localgit import (
     switch_branch,
     worktree_holding,
 )
-from github_checker.models import IssueRef, LocalStatus, MergedPr, PrDetail, PrRef
+from github_checker.models import (
+    HaltStatus,
+    IssueRef,
+    LocalStatus,
+    MergedPr,
+    PrDetail,
+    PrRef,
+)
 
 
 # contracts/actions/v1 wire discriminators.
@@ -81,6 +88,8 @@ class ActionResult(BaseModel):
     issue: IssueRef | None = None
     prs: list[PrRef] | None = None
     merges: list[MergedPr] | None = None
+    changed: bool | None = None  # halt-set: did the read-back state move
+    halt: HaltStatus | None = None
 
 
 # --- contracts/actions/v1: which fields each verb is *about* -----------------
@@ -139,6 +148,8 @@ ACTION_FIELDS: dict[str, frozenset[str]] = {
     ),
     "pr-search": frozenset({"error", "prs"}),
     "merged-prs": frozenset({"error", "merges"}),
+    "halt-read": frozenset({"error", "halt"}),
+    "halt-set": frozenset({"error", "changed", "halt"}),
 }
 
 

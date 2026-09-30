@@ -61,12 +61,18 @@ def test_the_load_bearing_nulls_are_present_in_the_fixtures() -> None:
     assert by_name["merge-unknown"]["merged"] is None
     assert by_name["pr-search-unread"]["prs"] is None
     assert by_name["merged-prs-unread"]["merges"] is None
+    assert by_name["halt-set-unknown"]["changed"] is None
     # and their confirmed counterparts, so the contrast is pinned too
     assert by_name["issue-lookup-free"]["matches"] == []
     assert by_name["issue-create-refused"]["created"] is False
     assert by_name["merge-gate-refused"]["merged"] is False
     assert by_name["pr-search-none"]["prs"] == []
     assert by_name["merged-prs-none"]["merges"] == []
+    assert by_name["halt-set-on"]["changed"] is True
+    assert by_name["halt-set-refused"]["changed"] is False
+    # halt-read.ok is "read", not "healthy": missing is a successful read.
+    assert by_name["halt-read-missing"]["ok"] is True
+    assert by_name["halt-read-missing"]["halt"]["state"] == "missing"
 
 
 # --- schema <-> emitter parity ----------------------------------------------
@@ -195,6 +201,10 @@ REAL_INVOCATIONS = [
     ("pr-search", ["pr-search", "/tmp", "--label", "human-merge-required"], 1),
     # A naive --since is refused before any gh call.
     ("merged-prs", ["merged-prs", "/tmp", "--since", "2026-09-30T00:00:00"], 1),
+    # /tmp is not a clone: the repository cannot be resolved.
+    ("halt-read", ["halt-read", "/tmp"], 1),
+    # No --state: refused before anything could mutate, whatever /tmp is.
+    ("halt-set", ["halt-set", "/tmp"], 1),
 ]
 
 
@@ -433,6 +443,7 @@ def test_every_nested_payload_is_closed() -> None:
         "local_status",
         "pr_ref",
         "merged_pr",
+        "halt_status",
     ):
         assert SCHEMA["$defs"][name]["additionalProperties"] is False, name
 

@@ -318,6 +318,34 @@ def _run_merged_prs(args: argparse.Namespace) -> None:
     _emit(merged_prs(args.dir, args.since))
 
 
+def _run_halt_read(args: argparse.Namespace) -> None:
+    """Read the DarkFactory halt of the clone's repository; print JSON."""
+    from github_checker.halt import halt_read
+
+    _emit(halt_read(args.dir))
+
+
+def _run_halt_set(args: argparse.Namespace) -> None:
+    """Write the DarkFactory halt, then read it back; print JSON."""
+    from github_checker.actions import result_for
+    from github_checker.halt import halt_set
+
+    if args.state not in ("on", "off"):
+        # A pre-mutation refusal: nothing ran, so `changed` is a definite
+        # False, never the catch-all's "may have landed" null (review #50).
+        _emit(
+            result_for(
+                "halt-set",
+                args.dir,
+                ok=False,
+                error="--state on|off is required",
+                changed=False,
+            )
+        )
+        return
+    _emit(halt_set(args.dir, args.state))
+
+
 def _run_issue_create(args: argparse.Namespace) -> None:
     """Create an inbox issue from validated parts plus a prose file."""
     from github_checker.actions import result_for
@@ -423,6 +451,8 @@ ACTION_VERBS = (
     "issue-create",
     "pr-search",
     "merged-prs",
+    "halt-read",
+    "halt-set",
 )
 
 
@@ -721,6 +751,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--since", default=None, help="timezone-aware ISO-8601 time, e.g. …Z"
     )
 
+    halt_read_p = sub.add_parser(
+        "halt-read",
+        help="the DarkFactory halt state of this clone's repository; prints JSON",
+    )
+    halt_read_p.add_argument("dir", type=Path, help="path to a local clone")
+    halt_set_p = sub.add_parser(
+        "halt-set",
+        help="write the DarkFactory halt (admin), then read it back; prints JSON",
+    )
+    halt_set_p.add_argument("dir", type=Path, help="path to a local clone")
+    halt_set_p.add_argument("--state", default=None, help="on | off")
+
     return parser
 
 
@@ -762,6 +804,10 @@ def main() -> None:
         _dispatch_guarded("pr-search", args.dir, lambda: _run_pr_search(args))
     elif args.command == "merged-prs":
         _dispatch_guarded("merged-prs", args.dir, lambda: _run_merged_prs(args))
+    elif args.command == "halt-read":
+        _dispatch_guarded("halt-read", args.dir, lambda: _run_halt_read(args))
+    elif args.command == "halt-set":
+        _dispatch_guarded("halt-set", args.dir, lambda: _run_halt_set(args))
     else:
         _run_tui(args.config)
 

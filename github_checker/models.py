@@ -3,6 +3,7 @@
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
@@ -113,6 +114,17 @@ class MergedPr(BaseModel):
     url: str
     merged_at: str  # ISO-8601, as GitHub reports it
     merged_by: str | None = None
+
+
+class HaltStatus(BaseModel):
+    """The DarkFactory halt on one repository, as READ (never as written).
+
+    Only `on` and `off` are healthy; see github_checker/halt.py.
+    """
+
+    state: Literal["on", "off", "missing", "misconfigured", "unknown"]
+    ruleset_id: int | None = None
+    detail: str | None = None
 
 
 class RulesetInfo(BaseModel):
