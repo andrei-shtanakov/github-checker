@@ -24,7 +24,11 @@ token — and admits the admin.
 The unit of truth is the ruleset read back, never the write's answer:
 `halt-set` writes the canonical definition (which also repairs a
 misconfigured single ruleset), then reads the halt again and reports THAT.
-`halt-set --state off` on a repository with no ruleset creates it disabled —
+The ruleset NAMED `darkfactory-halt` is the halt: writing it replaces its
+whole definition, so any other rule someone added to it is removed — the
+read already calls such a ruleset `misconfigured`, and protections belong in
+their own rulesets. `halt-set --state off` on a repository with no ruleset
+creates it disabled —
 "arming" the repository, so a later halt is a toggle and admission checks
 can see a confirmed `off` instead of `missing`.
 """
@@ -214,9 +218,14 @@ def _judge(ruleset: dict[str, Any], ruleset_id: int) -> HaltStatus:
         None,
     ):
         problems.append(f"branch condition {ref or 'missing'}")
-    types = sorted(rule.get("type") for rule in ruleset.get("rules") or [])
+    rules = ruleset.get("rules") or []
+    types = sorted(rule.get("type") for rule in rules)
     if types != ["update"]:
         problems.append(f"rules {types}")
+    elif (rules[0].get("parameters") or {}).get("update_allows_fetch_and_merge"):
+        # GitHub may omit the parameters on read; when it sends them, a
+        # loosened rule is not the halt (review #50).
+        problems.append("update rule allows fetch-and-merge")
     bypass = ruleset.get("bypass_actors")
     if bypass is None:
         problems.append("bypass list not visible to this reader (needs admin)")
@@ -224,11 +233,16 @@ def _judge(ruleset: dict[str, Any], ruleset_id: int) -> HaltStatus:
         {k: b.get(k) for k in ("actor_id", "actor_type", "bypass_mode")} for b in bypass
     ] != ADMIN_ONLY_BYPASS:
         problems.append(f"bypass {bypass}")
-    if problems:
-        return HaltStatus(
-            state="misconfigured", ruleset_id=ruleset_id, detail="; ".join(problems)
-        )
     enforcement = ruleset.get("enforcement")
+    if problems:
+        # The enforcement is kept in the detail: a reader that cannot see the
+        # bypass list still learns whether the ruleset is active (review #50;
+        # D2's admission checks run under a non-admin token).
+        return HaltStatus(
+            state="misconfigured",
+            ruleset_id=ruleset_id,
+            detail="; ".join(problems) + f"; enforcement {enforcement!r}",
+        )
     if enforcement == "active":
         return HaltStatus(state="on", ruleset_id=ruleset_id)
     if enforcement == "disabled":

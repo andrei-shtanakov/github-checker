@@ -38,9 +38,10 @@ The places where `null` is load-bearing:
   (exit 0) of an unhealthy halt. Health is `halt.state` — only `on`/`off`.
   `halt-set.ok` means the read-back equals the requested state.
 - `halt-set.changed` — `true`/`false` the read-back state moved or not;
-  `null` the write failed and the read-back failed too: it may have landed.
-  Read the halt again; never assume either way. The halt itself is always
-  the READ state (`halt.state`), never what was written.
+  `null` whenever the read-back itself failed — after a failed write (it may
+  have landed) and after a successful one alike: an unread state proves
+  nothing either way. Read the halt again; never assume. The halt itself is
+  always the READ state (`halt.state`), never what was written.
 - `issue-create.created` — `true` created; `false` definitely not created on
   this attempt; `null` the mutating call broke and **may have landed**. Look
   again; never create again.

@@ -264,3 +264,18 @@ def test_the_cli_refusal_is_a_definite_no_change(capsys, monkeypatch) -> None:
         cli.main()
     payload = json.loads(capsys.readouterr().out)
     assert (payload["ok"], payload["changed"]) == (False, False)
+
+
+def test_a_loosened_update_rule_is_misconfigured(forge) -> None:
+    loose = [{"type": "update", "parameters": {"update_allows_fetch_and_merge": True}}]
+    forge(Forge([_ruleset(rules=loose)]))
+    result = halt_read(Path("/r"))
+    assert _state(result) == "misconfigured"
+
+
+def test_an_invisible_bypass_list_still_says_the_enforcement(forge) -> None:
+    """Review #50: a non-admin reader learns active vs disabled."""
+    forge(Forge([_ruleset(bypass_actors=None)]))
+    result = halt_read(Path("/r"))
+    assert result.halt is not None
+    assert "enforcement 'active'" in (result.halt.detail or "")

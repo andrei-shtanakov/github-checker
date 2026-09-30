@@ -203,7 +203,8 @@ REAL_INVOCATIONS = [
     ("merged-prs", ["merged-prs", "/tmp", "--since", "2026-09-30T00:00:00"], 1),
     # /tmp is not a clone: the repository cannot be resolved.
     ("halt-read", ["halt-read", "/tmp"], 1),
-    ("halt-set", ["halt-set", "/tmp", "--state", "on"], 1),
+    # No --state: refused before anything could mutate, whatever /tmp is.
+    ("halt-set", ["halt-set", "/tmp"], 1),
 ]
 
 
