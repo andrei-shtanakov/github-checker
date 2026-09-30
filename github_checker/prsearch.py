@@ -3,9 +3,13 @@
 One `gh search prs` call covers every repository of the owner — the consumer
 (dispatcher's human queue) polls, and a per-repo walk would multiply the
 calls by the fleet size. Each hit is then enriched with what a human needs to
-merge it safely (the head SHA for `--expect-head`) and to age the wait (when
-the label was last added). An enrichment read that fails leaves its fields
-None — unknown — while the PR itself stays in the list: it was found.
+merge it safely (the head SHA, which the consumer pins as devtools
+`human-merge.sh --expect-head`) and to age the wait (when the label was last
+added). That enrichment costs two `gh api` calls per hit — bounded by the
+labelled set, which for a human-merge label is a handful, not the fleet; a
+consumer that polls should cache the answer. An enrichment read that fails
+leaves its fields None — unknown — while the PR itself stays in the list: it
+was found.
 
 The search itself follows the issue-lookup idiom: `[]` is a confirmed empty
 answer, and anything short of an exhaustive read (a failed call, unparseable
@@ -31,10 +35,13 @@ LABEL_MAX_LEN = 100
 
 
 def _valid_label(label: str) -> bool:
+    # A comma is refused: `gh search prs --label` treats it as a list
+    # separator, so "a,b" would silently search two labels.
     return (
         0 < len(label) <= LABEL_MAX_LEN
         and label.isprintable()
         and label == label.strip()
+        and "," not in label
     )
 
 
@@ -92,7 +99,7 @@ def pr_search(path: Path, label: str, *, binary: str = "gh") -> ActionResult:
                 ),
             )
         prs = [_enriched(path, hit, label, binary) for hit in hits]
-    except (AttributeError, KeyError, TypeError, ValidationError) as err:
+    except (AttributeError, KeyError, TypeError, ValueError, ValidationError) as err:
         return result_for(
             "pr-search",
             path,

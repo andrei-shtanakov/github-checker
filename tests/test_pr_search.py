@@ -159,6 +159,15 @@ def test_a_malformed_hit_is_unread(monkeypatch) -> None:
     assert result.prs is None
 
 
+def test_a_non_integer_number_is_unread(monkeypatch) -> None:
+    hit = _hit(7)
+    hit["number"] = "seven"
+    _patch(monkeypatch, Gh([hit]))
+    result = pr_search(Path("/repo"), LABEL)
+    assert result.ok is False
+    assert result.prs is None
+
+
 def test_unresolvable_owner_is_refused(monkeypatch) -> None:
     monkeypatch.setattr("github_checker.prsearch.run_gh", Gh([]))
     monkeypatch.setattr("github_checker.prsearch.repo_slug", lambda *a, **k: None)
@@ -170,7 +179,7 @@ def test_unresolvable_owner_is_refused(monkeypatch) -> None:
 def test_an_invalid_label_is_refused_before_any_call(monkeypatch) -> None:
     gh = Gh([])
     _patch(monkeypatch, gh)
-    for bad in ("", "a\nb", "x" * 101):
+    for bad in ("", "a\nb", "x" * 101, "a,b", " padded"):
         result = pr_search(Path("/repo"), bad)
         assert result.ok is False
         assert result.prs is None

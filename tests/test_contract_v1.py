@@ -425,6 +425,7 @@ def test_every_nested_payload_is_closed() -> None:
         "review_thread",
         "issue_ref",
         "local_status",
+        "pr_ref",
     ):
         assert SCHEMA["$defs"][name]["additionalProperties"] is False, name
 
