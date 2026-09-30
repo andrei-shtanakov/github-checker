@@ -53,16 +53,20 @@ def test_the_fixtures_cover_every_verb_and_both_error_kinds() -> None:
 
 
 def test_the_load_bearing_nulls_are_present_in_the_fixtures() -> None:
-    """The three places `null` means "unknown" each have a fixture, so the
+    """Every place `null` means "unknown" has a fixture, so the
     schema is exercised against them rather than only against happy paths."""
     by_name = {p.stem: json.loads(p.read_text()) for p in FIXTURES}
     assert by_name["issue-lookup-unread"]["matches"] is None
     assert by_name["issue-create-unknown"]["created"] is None
     assert by_name["merge-unknown"]["merged"] is None
+    assert by_name["pr-search-unread"]["prs"] is None
+    assert by_name["merged-prs-unread"]["merges"] is None
     # and their confirmed counterparts, so the contrast is pinned too
     assert by_name["issue-lookup-free"]["matches"] == []
     assert by_name["issue-create-refused"]["created"] is False
     assert by_name["merge-gate-refused"]["merged"] is False
+    assert by_name["pr-search-none"]["prs"] == []
+    assert by_name["merged-prs-none"]["merges"] == []
 
 
 # --- schema <-> emitter parity ----------------------------------------------
@@ -189,6 +193,8 @@ REAL_INVOCATIONS = [
     ),
     # /tmp is not a clone: the owner cannot be resolved, so it refuses.
     ("pr-search", ["pr-search", "/tmp", "--label", "human-merge-required"], 1),
+    # A naive --since is refused before any gh call.
+    ("merged-prs", ["merged-prs", "/tmp", "--since", "2026-09-30T00:00:00"], 1),
 ]
 
 
@@ -426,6 +432,7 @@ def test_every_nested_payload_is_closed() -> None:
         "issue_ref",
         "local_status",
         "pr_ref",
+        "merged_pr",
     ):
         assert SCHEMA["$defs"][name]["additionalProperties"] is False, name
 

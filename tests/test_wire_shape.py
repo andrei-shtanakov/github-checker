@@ -59,6 +59,7 @@ EXPECTED_KEYS = {
     "issue-create": ENVELOPE
     | {"error", "detail", "created", "issue", "matches", "malformed"},
     "pr-search": ENVELOPE | {"error", "prs"},
+    "merged-prs": ENVELOPE | {"error", "merges"},
 }
 
 REF = IssueRef(
@@ -76,7 +77,7 @@ def shape(result: ActionResult) -> set[str]:
     return set(result.model_dump(mode="json", exclude_unset=True))
 
 
-def test_the_nine_verbs_are_the_whole_contract() -> None:
+def test_the_ten_verbs_are_the_whole_contract() -> None:
     """`snapshot` has its own shape and belongs to snapshot/v1; the TUI
     prints no envelope at all."""
     assert set(ACTION_FIELDS) == set(EXPECTED_KEYS)

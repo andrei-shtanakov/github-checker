@@ -28,7 +28,7 @@ from github_checker.localgit import (
     switch_branch,
     worktree_holding,
 )
-from github_checker.models import IssueRef, LocalStatus, PrDetail, PrRef
+from github_checker.models import IssueRef, LocalStatus, MergedPr, PrDetail, PrRef
 
 
 # contracts/actions/v1 wire discriminators.
@@ -39,7 +39,7 @@ from github_checker.models import IssueRef, LocalStatus, PrDetail, PrRef
 # wire drift, and `action` there is diagnostic only.
 SCHEMA_VERSION = 1
 
-KIND_ACTION = "action"  # one of the eight verbs answered
+KIND_ACTION = "action"  # one of the action verbs answered
 KIND_CLI_ERROR = "cli_error"  # argv refused before dispatch; nothing ran
 KIND_CONTRACT_ERROR = "contract_error"  # producer detected its own drift
 
@@ -80,6 +80,7 @@ class ActionResult(BaseModel):
     created: bool | None = None
     issue: IssueRef | None = None
     prs: list[PrRef] | None = None
+    merges: list[MergedPr] | None = None
 
 
 # --- contracts/actions/v1: which fields each verb is *about* -----------------
@@ -137,6 +138,7 @@ ACTION_FIELDS: dict[str, frozenset[str]] = {
         {"error", "detail", "created", "issue", "matches", "malformed"}
     ),
     "pr-search": frozenset({"error", "prs"}),
+    "merged-prs": frozenset({"error", "merges"}),
 }
 
 
