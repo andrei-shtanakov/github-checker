@@ -115,3 +115,17 @@ def test_an_unresolvable_repository_refuses(forge) -> None:
     forge(Forge([]), slug=None)
     r = halt_gate(Path("/r"))
     assert (r.ok, r.admit) == (False, False)
+
+
+ORIGINS = json.loads(
+    (
+        Path(__file__).parent.parent / "contracts/halt-admission/v1/vectors.json"
+    ).read_text()
+)["origin_vectors"]
+
+
+@pytest.mark.parametrize("v", ORIGINS, ids=[v["origin"] or "<empty>" for v in ORIGINS])
+def test_every_origin_vector(v: dict) -> None:
+    from github_checker.halt_gate import is_github_origin
+
+    assert is_github_origin(v["origin"]) is v["github"]

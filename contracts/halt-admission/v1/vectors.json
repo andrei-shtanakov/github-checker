@@ -159,5 +159,51 @@
       "admit": true,
       "code": "admit_missing"
     }
+  ],
+  "origin_vectors": [
+    {
+      "origin": "git@github.com:andrei-shtanakov/devtools.git",
+      "github": true
+    },
+    {
+      "origin": "https://github.com/andrei-shtanakov/devtools",
+      "github": true
+    },
+    {
+      "origin": "https://x-access-token:abc@github.com/o/r.git",
+      "github": true
+    },
+    {
+      "origin": "ssh://git@github.com/o/r.git",
+      "github": true
+    },
+    {
+      "origin": "ssh://git@github.com:443/o/r.git",
+      "github": true
+    },
+    {
+      "origin": "https://GitHub.com/o/r",
+      "github": true
+    },
+    {
+      "origin": "git@git.epam.com:team/sdd-framework.git",
+      "github": false
+    },
+    {
+      "origin": "https://gitlab.com/o/r.git",
+      "github": false
+    },
+    {
+      "origin": "https://github.com.evil.example/o/r",
+      "github": false
+    },
+    {
+      "origin": "/local/bare/repo.git",
+      "github": false
+    },
+    {
+      "origin": "",
+      "github": false
+    }
   ]
 }

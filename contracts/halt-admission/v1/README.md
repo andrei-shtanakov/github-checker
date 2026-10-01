@@ -37,9 +37,20 @@ missing ruleset is a forgotten arming — which dispatcher's admin read shows
 as a deviation — never an agent's way around the halt. Refusing would block
 every repository outside the armed fleet.
 
-**Consumer-level rule, outside the vectors:** a checkout whose origin is not
-a GitHub repository has no forge halt — admit (`admit_not_github`). A GitHub
-origin whose owner/name cannot be resolved is unreadable — refuse.
+**Consumer-level rule — `admit_not_github`:** a checkout whose
+`remote.origin.url` host is not `github.com` has no forge halt — admit. A
+checkout with NO origin is not GitHub either — admit. A GitHub origin whose
+owner/name cannot be resolved is unreadable — refuse. The discriminator is
+the origin URL's host, exactly; `origin_vectors` in `vectors.json` pins it
+(reference: `github_checker.halt_gate.is_github_origin`). Consumers that only
+ever act on GitHub repositories (devtools, dispatcher) need not apply it.
+
+## The answer is `admit`, never an exit code
+
+`github-checker halt-gate` follows actions/v1: exit 0 means "answered"
+(`ok: true`), not "admitted" — a refusal of a halted repository exits 0
+with `admit: false`. An unreadable halt exits 1 with `ok: false` and
+`admit: false`. Read `admit`; treat anything but `true` as refuse.
 
 ## What a refusal means
 
@@ -49,6 +60,7 @@ its code, so an operator can tell "halted" from "GitHub unreadable".
 
 ## vectors.json
 
-`{"schema_version": 1, "vectors": [{name, listing, detail, admit, code}]}` —
+`{"schema_version": 1, "vectors": [...], "origin_vectors": [{origin, github}]}`;
+each of `vectors` is `{name, listing, detail, admit, code}` —
 `listing` / `detail` are what the two reads returned (`null` = unreadable or
 not read); `admit` / `code` are the required answer.

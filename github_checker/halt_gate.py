@@ -37,6 +37,23 @@ from github_checker.halt import HALT_RULESET
 
 Decision = tuple[bool, str, str]
 
+# git@github.com:o/r(.git) | ssh://git@github.com/o/r | https://github.com/o/r
+_GITHUB_HOSTS = ("github.com", "www.github.com")
+
+
+def is_github_origin(url: str) -> bool:
+    """Whether a `remote.origin.url` points at github.com (the consumer-level
+    rule: a non-GitHub checkout has no forge halt — `admit_not_github`)."""
+    url = url.strip()
+    if url.startswith("git@"):
+        host = url[4:].split(":", 1)[0]
+    elif "://" in url:
+        rest = url.split("://", 1)[1]
+        host = rest.split("/", 1)[0].rsplit("@", 1)[-1].split(":", 1)[0]
+    else:
+        return False
+    return host.lower() in _GITHUB_HOSTS
+
 
 def decide(
     listing: list[dict[str, Any]] | None, detail: dict[str, Any] | None
