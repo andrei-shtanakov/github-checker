@@ -89,6 +89,7 @@ class ActionResult(BaseModel):
     prs: list[PrRef] | None = None
     merges: list[MergedPr] | None = None
     changed: bool | None = None  # halt-set: did the read-back state move
+    admit: bool | None = None  # halt-gate: may new agent work start
     halt: HaltStatus | None = None
 
 
@@ -150,6 +151,7 @@ ACTION_FIELDS: dict[str, frozenset[str]] = {
     "merged-prs": frozenset({"error", "merges"}),
     "halt-read": frozenset({"error", "halt"}),
     "halt-set": frozenset({"error", "changed", "halt"}),
+    "halt-gate": frozenset({"error", "detail", "admit"}),
 }
 
 

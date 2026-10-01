@@ -346,6 +346,13 @@ def _run_halt_set(args: argparse.Namespace) -> None:
     _emit(halt_set(args.dir, args.state))
 
 
+def _run_halt_gate(args: argparse.Namespace) -> None:
+    """May new agent work start on the clone's repository? Print JSON."""
+    from github_checker.halt_gate import halt_gate
+
+    _emit(halt_gate(args.dir))
+
+
 def _run_issue_create(args: argparse.Namespace) -> None:
     """Create an inbox issue from validated parts plus a prose file."""
     from github_checker.actions import result_for
@@ -453,6 +460,7 @@ ACTION_VERBS = (
     "merged-prs",
     "halt-read",
     "halt-set",
+    "halt-gate",
 )
 
 
@@ -762,6 +770,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     halt_set_p.add_argument("dir", type=Path, help="path to a local clone")
     halt_set_p.add_argument("--state", default=None, help="on | off")
+    halt_gate_p = sub.add_parser(
+        "halt-gate",
+        help="may new agent work start on this clone's repository? prints JSON",
+    )
+    halt_gate_p.add_argument("dir", type=Path, help="path to a local clone")
 
     return parser
 
@@ -808,6 +821,8 @@ def main() -> None:
         _dispatch_guarded("halt-read", args.dir, lambda: _run_halt_read(args))
     elif args.command == "halt-set":
         _dispatch_guarded("halt-set", args.dir, lambda: _run_halt_set(args))
+    elif args.command == "halt-gate":
+        _dispatch_guarded("halt-gate", args.dir, lambda: _run_halt_gate(args))
     else:
         _run_tui(args.config)
 
