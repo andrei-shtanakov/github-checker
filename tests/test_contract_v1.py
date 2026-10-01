@@ -70,6 +70,8 @@ def test_the_load_bearing_nulls_are_present_in_the_fixtures() -> None:
     assert by_name["merged-prs-none"]["merges"] == []
     assert by_name["halt-set-on"]["changed"] is True
     assert by_name["halt-set-refused"]["changed"] is False
+    assert by_name["halt-gate-unknown"]["admit"] is False
+    assert by_name["halt-gate-admit"]["admit"] is True
     # halt-read.ok is "read", not "healthy": missing is a successful read.
     assert by_name["halt-read-missing"]["ok"] is True
     assert by_name["halt-read-missing"]["halt"]["state"] == "missing"
@@ -205,6 +207,7 @@ REAL_INVOCATIONS = [
     ("halt-read", ["halt-read", "/tmp"], 1),
     # No --state: refused before anything could mutate, whatever /tmp is.
     ("halt-set", ["halt-set", "/tmp"], 1),
+    ("halt-gate", ["halt-gate", "/tmp"], 1),
 ]
 
 
